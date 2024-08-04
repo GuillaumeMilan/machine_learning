@@ -13,4 +13,15 @@ model = MachineLearning.Model.init([784, 16, 16, 10])
 MachineLearning.Model.execute(model, random_image)
 ```
 
-- TODO: Read images from the [MNIST](https://github.com/golbin/TensorFlow-MNIST/tree/master/mnist/data)
+## Chapter 2: Gradient descent
+
+[MNIST Dataset](https://github.com/golbin/TensorFlow-MNIST/tree/master/mnist/data)
+Train a model with MNIST dataset:
+```elixir
+model = MachineLearning.Model.init([784, 128, 10], 0.01)
+set = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
+model = set
+    |> Enum.reduce(model, fn {image, label}, model -> MachineLearning.Model.train(model, image, label) end)
+```
+
+Detailed script in: `./scripts/mnist.exs`
