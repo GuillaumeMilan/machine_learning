@@ -13,4 +13,4 @@ model = MachineLearning.Model.init([784, 16, 16, 10])
 MachineLearning.Model.execute(model, random_image)
 ```
 
-- TODO: Read images from the [MNIST](https://github.com/mnielsen/neural-networks-and-deep-learning/raw/master/data/mnist.pkl.gz) dataset
+- TODO: Read images from the [MNIST](https://github.com/golbin/TensorFlow-MNIST/tree/master/mnist/data)

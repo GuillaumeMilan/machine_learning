@@ -22,6 +22,7 @@ defmodule MachineLearning.MixProject do
   defp deps do
     [
       {:nx, "~> 0.7.3"},
+      {:exla, "~> 0.7.3"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
   end
