@@ -7,8 +7,10 @@ defmodule MachineLearning.Mnist do
 
   @doc """
   Load the MNIST dataset from the given images and labels paths.
-  iex> MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte")
+
+    iex> MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte")
   """
+  @spec load(Path.t(), Path.t(), integer) :: Enumerable.t()
   def load(images_path, labels_path, batch_size \\ 30) do
     content = File.read!(images_path)
     <<_::32, n_images::32, n_rows::32, n_cols::32, images::binary>> = content
@@ -36,9 +38,12 @@ defmodule MachineLearning.Mnist do
   end
 
   @doc """
-  Print batch from the MNIST dataset
+  Inspect one entry from the MNIST dataset.
+
+    iex> {images, labels} = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte") |> Enum.at(1)
+    iex> MachineLearning.Mnist.inspect(images, labels, 0)
   """
-  @spec inspect(images_batch :: Nx.tensor, labels_batch :: Nx.tensor, index :: integer) :: {String.t(), Integer.t()}
+  @spec inspect(images_batch :: Nx.Tensor.t(), labels_batch :: Nx.Tensor.t(), index :: integer) :: {String.t(), Integer.t()}
   def inspect(images, labels, index) do
     images
     |> Nx.to_list()
@@ -56,6 +61,13 @@ defmodule MachineLearning.Mnist do
     |> then(&{&1, labels |> Nx.to_list() |> Enum.at(index) |> label_to_human()})
   end
 
+  @doc """
+  Check a model against any random input in the data-set
+
+    iex> set = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
+    iex> MachineLearning.Mnist.check(model, set)
+  """
+  @spec check(MachineLearning.Model.t(), Enumerable.t()) :: :ok
   def check(model, set) do
     set
     |> Enum.random()

@@ -11,12 +11,12 @@ defmodule MachineLearning.Model do
           loss_fun: function(),
           grad_fun: function()
         }
-  @type execution_with_activation :: {Nx.tensor(), list({Nx.tensor(), Nx.tensor()})}
+  @type execution_with_activation :: {Nx.Tensor.t(), list({Nx.Tensor.t(), Nx.Tensor.t()})}
 
   @doc """
   Initialize the model with the given layer sizes.
 
-  iex> MachineLearning.Model.init([784, 16, 16, 10])
+    iex> MachineLearning.Model.init([784, 16, 16, 10])
   """
   def init(layer_sizes, step \\ 0.01) do
     key = Nx.Random.key(42)
@@ -26,7 +26,7 @@ defmodule MachineLearning.Model do
     |> Enum.reduce({key, []}, fn {input_size, output_size}, {key, acc} ->
       {weights, key} = Nx.Random.normal(key, 0.0, 0.1, shape: {input_size, output_size})
       {biases, key} = Nx.Random.normal(key, 0.0, 0.1, shape: {output_size})
-      {key, [%Layer{weights: weights, biases: biases} | acc]}
+      {key, [Layer.new(weights, biases) | acc]}
     end)
     |> elem(1)
     |> Enum.reverse()
@@ -37,27 +37,37 @@ defmodule MachineLearning.Model do
   end
 
   @doc """
-  Execute the model on the given input.
-  iex> MachineLearning.Model.execute(model, input)
-  """
-  def execute(%__MODULE__{layers: layers}, input) do
-    Enum.reduce(layers, input, fn layer, activation ->
-      MachineLearning.Layer.execute(layer, activation)
-    end)
-  end
+  Run the model to predict the output of the given input.
 
+    iex> MachineLearning.Model.predict(model, input)
+  """
+  @spec predict(t(), Nx.Tensor.t()) :: Nx.Tensor.t()
   def predict(model, input) do
     model
     |> to_tuple()
     |> model.execute_fun.(input)
   end
 
+  @doc """
+  Calculate the loss of the model with the given activations and expected output.
+  Activations and expected output must be respectively of shape
+  `{batch_size, input_size}` and `{batch_size, output_size}`.
+
+    iex> MachineLearning.Model.loss(model, input, expected)
+  """
+  @spec loss(t(), Nx.Tensor.t(), Nx.Tensor.t()) :: Nx.Tensor.t()
   def loss(model, input, expected) do
     model
     |> to_tuple()
     |> model.loss_fun.(input, expected)
   end
 
+  @doc """
+  Calculate the accuracy of the model with the given input and expected output.
+
+    iex> MachineLearning.Model.accuracy(model, input, expected)
+  """
+  @spec accuracy(t(), Nx.Tensor.t(), Nx.Tensor.t()) :: Nx.Tensor.t()
   def accuracy(model, activation, expected) do
     model
     |> predict(activation)
@@ -66,6 +76,16 @@ defmodule MachineLearning.Model do
     |> Nx.mean()
   end
 
+  @doc """
+  Calculate the gradient of the model with the given activations and expected output.
+  Activations and expected output must be respectively of shape
+  `{batch_size, input_size}` and `{batch_size, output_size}`.
+
+  Returns the gradient of the model's layers on the form of a list of gradients.
+
+    iex> MachineLearning.Model.gradient(model, activations, expected)
+  """
+  @spec gradient(t(), Nx.Tensor.t(), Nx.Tensor.t()) :: list(Layer.t())
   def gradient(model, activations, expected) do
     model
     |> to_tuple()
@@ -73,7 +93,15 @@ defmodule MachineLearning.Model do
     |> to_list()
   end
 
-  @spec train(t(), activations :: Nx.tensor(), expected :: Nx.tensor()) :: t()
+  @doc """
+  Train the model with the given input and expected output.
+  activations and expected output must be respectively of shape
+  `{batch_size, input_size}` and `{batch_size, output_size}`.
+  Returns the updated model.
+
+    iex> MachineLearning.Model.train(model, activations, expected)
+  """
+  @spec train(t(), activations :: Nx.Tensor.t(), expected :: Nx.Tensor.t()) :: t()
   def train(model, activations, expected) do
     gradient = gradient(model, activations, expected)
 
@@ -93,6 +121,9 @@ defmodule MachineLearning.Model do
     layers
     |> Tuple.to_list()
   end
+
+  # Function compiled when generating the model
+  # They are also optimized using EXLA.jit
 
   defp grad_fun(loss_fun) do
     fn model, input, expected ->
@@ -136,11 +167,6 @@ defmodule MachineLearning.Model do
         fn unquote(layers_vars), input -> unquote(body) end
       end
     end)
-    # Debug by showing function body
-    # |> then(fn quoted ->
-    #  IO.puts(Macro.to_string(quoted))
-    #  quoted
-    # end)
     |> Code.eval_quoted()
     |> elem(0)
   end

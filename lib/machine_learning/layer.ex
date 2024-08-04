@@ -3,50 +3,25 @@ defmodule MachineLearning.Layer do
 
   @enforce_keys [:weights, :biases]
   defstruct weights: nil, biases: nil
+  @type t :: %__MODULE__{weights: Nx.Tensor.t(), biases: Nx.Tensor.t()}
 
-  def init(input_size, output_size) do
-    %__MODULE__{
-      weights: init_weights(input_size, output_size),
-      biases: init_bias(output_size)
-    }
+  @doc """
+  Create a new layer with the given weights and biases.
+  """
+  @spec new(Nx.Tensor.t(), Nx.Tensor.t()) :: t()
+  def new(weights, biases) do
+    %__MODULE__{weights: weights, biases: biases}
   end
 
+  @doc """
+  Update the layer with the given gradient and step.
+  iex> MachineLearning.Layer.update(layer, gradient, 0.01)
+  """
+  @spec update(t(), t(), float) :: t()
   def update(layer, gradient, step) do
     %__MODULE__{
       weights: Nx.subtract(layer.weights, Nx.multiply(gradient.weights, step)),
       biases: Nx.subtract(layer.biases, Nx.multiply(gradient.biases, step))
     }
   end
-
-  @doc"""
-  Execute the layer to get the next activation layer.
-
-  iex> MachineLearning.Layer.execute(layer, activation)
-  """
-  def execute(%__MODULE__{weights: weights, biases: biases}, activation) do
-    try do
-      activation
-      |> Nx.dot(weights)
-      |> Nx.add(biases)
-      |> Nx.sigmoid()
-    catch
-      _,_ -> raise "Error in Layer execution #{inspect weights} #{inspect biases} #{inspect activation}"
-    end
-  end
-
-  defp init_weights(input_size, output_size) do
-    Nx.tensor(
-      1..output_size
-      |> Enum.map(fn _ ->
-        1..input_size
-        |> Enum.map(fn _ -> :rand.uniform() end)
-      end)
-    )
-  end
-
-  defp init_bias(output_size) do
-    Nx.tensor(1..output_size |> Enum.map(fn _ -> :rand.uniform() end))
-  end
-
-
 end
