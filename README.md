@@ -19,7 +19,7 @@ MachineLearning.Network.execute(model, random_image)
 Train a model with MNIST dataset:
 ```elixir
 model = MachineLearning.Network.init([784, 128, 10], 0.01)
-set = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
+set = MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 30)
 model = set
     |> Enum.reduce(model, fn {image, label}, model -> MachineLearning.Network.train(model, image, label) end)
 ```

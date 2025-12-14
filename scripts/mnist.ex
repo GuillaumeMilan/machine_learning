@@ -1,7 +1,7 @@
 model = MachineLearning.Network.init([784, 128, 10], 0.01)
 
 set =
-  MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 10)
+  MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 10)
 
 IO.puts("Training...")
 
@@ -30,7 +30,7 @@ model =
 IO.puts("Predicting...")
 
 {single_image, expected} =
-  MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
+  MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 30)
   |> Enum.at(0)
 
 MachineLearning.Network.predict(model, single_image)

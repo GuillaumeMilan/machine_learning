@@ -71,7 +71,7 @@ defmodule MachineLearning.AxonMnist do
 
       iex> model = MachineLearning.AxonMnist.create_model()
       iex> params = MachineLearning.AxonMnist.init_params(model)
-      iex> train_data = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 32)
+      iex> train_data = MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 32)
       iex> trained_params = MachineLearning.AxonMnist.train(model, params, train_data, epochs: 5)
   """
   @spec train(Axon.t(), map(), Enumerable.t(), keyword()) :: map()
@@ -206,8 +206,8 @@ defmodule MachineLearning.AxonMnist do
   ## Examples
 
       iex> result = MachineLearning.AxonMnist.train_and_evaluate(
-      ...>   "./tmp/train-images-idx3-ubyte",
-      ...>   "./tmp/train-labels-idx1-ubyte",
+      ...>   "./tmp/train-images.idx3-ubyte",
+      ...>   "./tmp/train-labels.idx1-ubyte",
       ...>   epochs: 10,
       ...>   batch_size: 32
       ...> )

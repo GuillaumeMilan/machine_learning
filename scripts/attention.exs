@@ -1,5 +1,5 @@
 set =
-  MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 10)
+  MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 10)
 
 aw1 = MachineLearning.Network.init([784, 64, 8], 0.01)
 aw2 = MachineLearning.Network.init([784, 64, 8], 0.01)

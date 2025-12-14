@@ -6,9 +6,30 @@ defmodule MachineLearning.Mnist do
   """
 
   @doc """
+  Download the MNIST dataset into the ./tmp folder.
+
+    iex> MachineLearning.Mnist.download!()
+  """
+  @spec download!() :: :ok
+  def download!() do
+    File.rm_rf!("./tmp")
+    File.mkdir_p!("./tmp")
+
+    {_, 0} =
+      System.cmd("wget", [
+        "https://storage.googleapis.com/kaggle-data-sets/102285/242592/bundle/archive.zip?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=gcp-kaggle-com%40kaggle-161607.iam.gserviceaccount.com%2F20251214%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20251214T220517Z&X-Goog-Expires=259200&X-Goog-SignedHeaders=host&X-Goog-Signature=722881189a6d825490e46c7da6179f88a2351adf4ea003dbbde496216097dc1f783bdce898f813e808503a6d25a1baf4f9b6636e7e65feeb34c8d87f32f470dc273f6930c28a8cb18efdcd9e35a51507639858f3b38982bf491cfe0f639527ff055b21f5359c64cddd0e204893e030b8d7c1683ef1a979d999ecc7ad6f2124e77aae2c1ec82477ed078208cc6a7d2b939ef0c724b7eeb9872a7096135c71acc65495ec3430e04582997882e78cd82e7826069f7fbf07d7269b68806b0a88149bb2019ad59738f6368afa4cb5daf54139048dec5532bf0851f00b6d32fdc3a9dbc2e692a64e67f3a496b40429be3302b6ba6f8da52be20d3a6895181fd07ec7ff",
+        "-O",
+        "./tmp/archive.zip"
+      ])
+
+    {_, 0} = System.cmd("unzip", ["./tmp/archive.zip", "-d", "./tmp/"])
+    :ok
+  end
+
+  @doc """
   Load the MNIST dataset from the given images and labels paths.
 
-    iex> MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte")
+    iex> MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte")
   """
   @spec load(Path.t(), Path.t(), integer) :: Enumerable.t()
   def load(images_path, labels_path, batch_size \\ 30) do
@@ -41,7 +62,7 @@ defmodule MachineLearning.Mnist do
   @doc """
   Inspect one entry from the MNIST dataset.
 
-    iex> {images, labels} = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte") |> Enum.at(1)
+    iex> {images, labels} = MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte") |> Enum.at(1)
     iex> MachineLearning.Mnist.inspect(images, labels, 0)
   """
   @spec inspect(images_batch :: Nx.Tensor.t(), labels_batch :: Nx.Tensor.t(), index :: integer) ::
@@ -66,7 +87,7 @@ defmodule MachineLearning.Mnist do
   @doc """
   Check a model against any random input in the data-set
 
-    iex> set = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
+    iex> set = MachineLearning.Mnist.load("./tmp/train-images.idx3-ubyte", "./tmp/train-labels.idx1-ubyte", 30)
     iex> MachineLearning.Mnist.check(model, set)
   """
   @spec check(MachineLearning.Network.t(), Enumerable.t()) :: :ok
