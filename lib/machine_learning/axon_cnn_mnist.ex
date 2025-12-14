@@ -9,6 +9,25 @@ defmodule MachineLearning.AxonCnnMnist do
 
   The CNN architecture typically achieves better accuracy than fully-connected networks
   on image classification tasks by preserving spatial relationships in the data.
+
+        # Train a model first
+        result = MachineLearning.AxonCnnMnist.train_and_evaluate(
+          "./tmp/train-images.idx3-ubyte",
+          "./tmp/train-labels.idx1-ubyte",
+          "./tmp/t10k-images.idx3-ubyte",
+          "./tmp/t10k-labels.idx1-ubyte",
+          epochs: 5
+        )
+
+        # Then analyze predictions with feature maps
+        MachineLearning.AxonCnnMnist.analyze_prediction(
+          result.model,
+          result.params,
+          "./tmp/t10k-images.idx3-ubyte",
+          "./tmp/t10k-labels.idx1-ubyte",
+          show_feature_maps: true,
+          layers: ["conv1", "conv2"]
+        )
   """
 
   @doc """
@@ -96,12 +115,9 @@ defmodule MachineLearning.AxonCnnMnist do
   def init_params(model, _key \\ nil) do
     {init_fun, _} = Axon.build(model)
 
-    init_fun.(Nx.template({1, 28, 28, 1}, {:f, 32}), %Axon.ModelState{
-      data: %{},
-      parameters: %{},
-      state: %{},
-      frozen_parameters: %{}
-    })
+    # Create a proper template and state for initialization
+    template = Nx.template({1, 28, 28, 1}, :f32)
+    init_fun.(template, Axon.ModelState.new(%{}))
   end
 
   @doc """
@@ -418,6 +434,211 @@ defmodule MachineLearning.AxonCnnMnist do
   end
 
   @doc """
+  Visualizes the feature maps (activations) from convolutional layers for a given input image.
+
+  This function extracts and displays the intermediate representations learned by the CNN,
+  showing how the network transforms the input image through different convolutional layers.
+
+  ## Parameters
+
+  - `model`: The trained Axon CNN model
+  - `params`: Trained model parameters
+  - `input_image`: Single image tensor of shape {1, 28, 28, 1} or {1, 784}
+  - `opts`: Visualization options
+    - `:layers` - List of layer names to visualize (default: ["conv1", "conv2"])
+    - `:max_filters` - Maximum number of filters to show per layer (default: 8)
+    - `:show_original` - Whether to show the original image (default: true)
+
+  ## Examples
+
+      iex> # Get a single image from test data
+      iex> test_data = MachineLearning.Mnist.load("./tmp/t10k-images.idx3-ubyte", "./tmp/t10k-labels.idx1-ubyte", 1)
+      iex> {images, labels} = Enum.take(test_data, 1) |> List.first()
+      iex> single_image = images |> Nx.slice_along_axis(0, 1, axis: 0)
+      iex> MachineLearning.AxonCnnMnist.inspect_feature_maps(model, trained_params, single_image)
+  """
+  @spec inspect_feature_maps(Axon.t(), map(), Nx.Tensor.t(), keyword()) :: :ok
+  def inspect_feature_maps(model, params, input_image, opts \\ []) do
+    layers_to_show = Keyword.get(opts, :layers, ["conv1", "conv2"])
+    max_filters = Keyword.get(opts, :max_filters, 8)
+    show_original = Keyword.get(opts, :show_original, true)
+
+    # Ensure input is in correct format - handle different input shapes
+    formatted_input = case Nx.shape(input_image) do
+      {batch_size, 784} ->
+        # Flattened format, reshape to CNN format
+        Nx.reshape(input_image, {batch_size, 28, 28, 1})
+      {_, 28, 28, 1} ->
+        # Already in CNN format
+        input_image
+      _ ->
+        # Fallback: try to ensure it's in the right format
+        input_image
+    end
+
+    if show_original do
+      IO.puts("\n#{IO.ANSI.cyan()}=== Original Input Image ===#{IO.ANSI.reset()}")
+      display_image_tensor(formatted_input)
+    end
+
+    # Extract feature maps from specified layers
+    Enum.each(layers_to_show, fn layer_name ->
+      case extract_layer_activations(model, params, formatted_input, layer_name) do
+        {:ok, activations} ->
+          display_feature_maps(activations, layer_name, max_filters)
+        {:error, reason} ->
+          IO.puts("#{IO.ANSI.red()}Failed to extract activations for #{layer_name}: #{reason}#{IO.ANSI.reset()}")
+      end
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Extracts activations from a specific layer in the CNN model.
+
+  ## Parameters
+
+  - `model`: The Axon CNN model
+  - `params`: Trained model parameters
+  - `input`: Input tensor of shape {1, 28, 28, 1}
+  - `layer_name`: Name of the layer to extract activations from
+
+  Returns `{:ok, activations}` on success or `{:error, reason}` on failure.
+  """
+  @spec extract_layer_activations(Axon.t(), map(), Nx.Tensor.t(), String.t()) :: {:ok, Nx.Tensor.t()} | {:error, String.t()}
+  def extract_layer_activations(_model, params, input, layer_name) do
+    try do
+      # For now, we'll create truncated models to extract layer activations
+      # Note: This is a simplified approach - full intermediate extraction
+      # would require modifying the model architecture
+      case layer_name do
+        "conv1" ->
+          # For demonstration, we'll create a truncated model up to conv1
+          truncated_model = Axon.input("input", shape: {nil, 28, 28, 1})
+                           |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
+
+          {_init_fun, truncated_predict_fun} = Axon.build(truncated_model, mode: :inference)
+          activations = truncated_predict_fun.(params, %{"input" => input})
+          {:ok, activations}
+
+        "conv2" ->
+          # Create model up to conv2
+          truncated_model = Axon.input("input", shape: {nil, 28, 28, 1})
+                           |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
+                           |> Axon.max_pool(kernel_size: 2, name: "pool1")
+                           |> Axon.conv(64, kernel_size: 3, padding: :same, activation: :relu, name: "conv2")
+
+          {_init_fun, truncated_predict_fun} = Axon.build(truncated_model, mode: :inference)
+          activations = truncated_predict_fun.(params, %{"input" => input})
+          {:ok, activations}
+
+        _ ->
+          {:error, "Layer #{layer_name} not supported for visualization"}
+      end
+    rescue
+      error -> {:error, "#{inspect(error)}"}
+    catch
+      error -> {:error, "#{inspect(error)}"}
+    end
+  end
+
+  @doc """
+  Displays feature maps from a convolutional layer activation.
+
+  ## Parameters
+
+  - `activations`: Tensor of activations from a conv layer, shape {1, height, width, channels}
+  - `layer_name`: Name of the layer for display purposes
+  - `max_filters`: Maximum number of filters/channels to display
+  """
+  @spec display_feature_maps(Nx.Tensor.t(), String.t(), integer()) :: :ok
+  def display_feature_maps(activations, layer_name, max_filters) do
+    {batch, height, width, channels} = Nx.shape(activations)
+
+    IO.puts("\n#{IO.ANSI.yellow()}=== Feature Maps from #{layer_name} ===#{IO.ANSI.reset()}")
+    IO.puts("Shape: {#{batch}, #{height}, #{width}, #{channels}} (batch, height, width, channels)")
+
+    # Display up to max_filters feature maps
+    num_filters_to_show = min(channels, max_filters)
+
+    for filter_idx <- 0..(num_filters_to_show - 1) do
+      IO.puts("\n#{IO.ANSI.green()}--- Filter #{filter_idx + 1}/#{channels} ---#{IO.ANSI.reset()}")
+
+      # Extract single filter activation: {1, height, width, 1}
+      filter_activation = activations |> Nx.slice_along_axis(filter_idx, 1, axis: 3)
+
+      # Convert to 2D for visualization: {height, width}
+      filter_2d = filter_activation |> Nx.squeeze(axes: [0, 3])
+
+      display_feature_map_ascii(filter_2d)
+    end
+
+    :ok
+  end
+
+  # Private function to display a 2D feature map as ASCII art
+  defp display_feature_map_ascii(feature_map) do
+    {height, width} = Nx.shape(feature_map)
+
+    # Normalize the feature map to 0-1 range for display
+    min_val = Nx.reduce_min(feature_map)
+    max_val = Nx.reduce_max(feature_map)
+
+    normalized = if Nx.equal(min_val, max_val) |> Nx.to_number() == 1 do
+      Nx.broadcast(0.5, {height, width})
+    else
+      Nx.subtract(feature_map, min_val)
+      |> Nx.divide(Nx.subtract(max_val, min_val))
+    end
+
+    # Convert to list for processing
+    feature_list = Nx.to_list(normalized)
+
+    # Display using ASCII characters (similar to MachineLearning.Mnist.inspect)
+    chars = " .:-=+*#%@"
+
+    Enum.each(feature_list, fn row ->
+      row_str = Enum.map(row, fn pixel ->
+        char_index = min(trunc(pixel * (String.length(chars) - 1)), String.length(chars) - 1)
+        String.at(chars, char_index)
+      end) |> Enum.join("")
+
+      IO.puts(row_str)
+    end)
+
+    # Show activation statistics
+    mean_activation = Nx.mean(feature_map) |> Nx.to_number() |> Float.round(4)
+    max_activation = Nx.to_number(max_val) |> Float.round(4)
+    min_activation = Nx.to_number(min_val) |> Float.round(4)
+
+    IO.puts("Stats: Min=#{min_activation}, Max=#{max_activation}, Mean=#{mean_activation}")
+  end
+
+  # Private function to display an image tensor as ASCII
+  defp display_image_tensor(image_tensor) do
+    # Assume input is {1, 28, 28, 1}, extract the 2D image
+    image_2d = image_tensor |> Nx.squeeze(axes: [0, 3])
+
+    # Use the same display logic as feature maps but with different character mapping
+    image_list = Nx.to_list(image_2d)
+
+    # Characters for grayscale display (darker to lighter)
+    chars = " .'`^\",:;Il!i><~+_-?][}{1)(|\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
+
+    Enum.each(image_list, fn row ->
+      row_str = Enum.map(row, fn pixel ->
+        # Clamp pixel value between 0 and 1
+        normalized_pixel = max(0, min(1, pixel))
+        char_index = min(trunc(normalized_pixel * (String.length(chars) - 1)), String.length(chars) - 1)
+        String.at(chars, char_index)
+      end) |> Enum.join("")
+
+      IO.puts(row_str)
+    end)
+  end
+
+  @doc """
   Inspects misclassified images from the CNN test data.
 
   ## Parameters
@@ -445,7 +666,116 @@ defmodule MachineLearning.AxonCnnMnist do
     :ok
   end
 
-  # Private function to find and display failures in a batch
+  @doc """
+  Shows a detailed analysis of how the CNN processes a specific image through its layers.
+
+  This function combines prediction with feature map visualization to show the complete
+  journey of an image through the CNN, including intermediate representations.
+
+  ## Parameters
+
+  - `model`: The trained Axon CNN model
+  - `params`: Trained model parameters
+  - `test_images_path`: Path to test images file
+  - `test_labels_path`: Path to test labels file
+  - `opts`: Analysis options
+    - `:image_index` - Specific image index to analyze (default: random)
+    - `:batch_index` - Index within the batch (default: random)
+    - `:show_feature_maps` - Whether to show feature maps (default: true)
+    - `:layers` - Layers to visualize (default: ["conv1", "pool1", "conv2", "pool2"])
+
+  ## Examples
+
+      iex> MachineLearning.AxonCnnMnist.analyze_prediction(
+      ...>   model, trained_params,
+      ...>   "./tmp/t10k-images.idx3-ubyte",
+      ...>   "./tmp/t10k-labels.idx1-ubyte",
+      ...>   show_feature_maps: true, layers: ["conv1", "conv2"]
+      ...> )
+  """
+  @spec analyze_prediction(Axon.t(), map(), String.t(), String.t(), keyword()) :: :ok
+  def analyze_prediction(model, params, test_images_path, test_labels_path, opts \\ []) do
+    batch_size = 32
+    image_index = Keyword.get(opts, :image_index, nil)
+    batch_index = Keyword.get(opts, :batch_index, nil)
+    show_feature_maps = Keyword.get(opts, :show_feature_maps, true)
+    layers = Keyword.get(opts, :layers, ["conv1", "pool1", "conv2", "pool2"])
+
+    test_data = MachineLearning.Mnist.load(test_images_path, test_labels_path, batch_size)
+
+    # Select batch and image
+    {images, labels} = if image_index do
+      Enum.at(test_data, image_index)
+    else
+      Enum.random(test_data)
+    end
+
+    {batch_size, _} = Nx.shape(images)
+    index = batch_index || Enum.random(0..(batch_size - 1))
+
+    # Extract single image
+    single_image = images |> Nx.slice_along_axis(index, 1, axis: 0)
+    single_label = labels |> Nx.slice_along_axis(index, 1, axis: 0)
+
+    # Make prediction
+    predicted_probs = predict(model, params, single_image)
+    predicted_class = predicted_probs |> Nx.argmax(axis: -1) |> Nx.squeeze() |> Nx.to_number()
+    confidence = predicted_probs |> Nx.to_list() |> List.first() |> Enum.at(predicted_class) |> Float.round(4)
+
+    # Get expected class
+    expected_class = single_label |> Nx.argmax(axis: -1) |> Nx.squeeze() |> Nx.to_number()
+
+    IO.puts("\n#{IO.ANSI.cyan()}=== CNN Prediction Analysis ===#{IO.ANSI.reset()}")
+
+    # Show original image using MachineLearning.Mnist.inspect format
+    {display, _} = MachineLearning.Mnist.inspect(images, labels, index)
+    IO.puts(display)
+
+    # Show prediction results
+    IO.puts("#{IO.ANSI.green()}Expected: #{expected_class}#{IO.ANSI.reset()}")
+
+    if predicted_class == expected_class do
+      IO.puts("#{IO.ANSI.green()}Predicted: #{predicted_class} ✓#{IO.ANSI.reset()}")
+    else
+      IO.puts("#{IO.ANSI.red()}Predicted: #{predicted_class} ✗#{IO.ANSI.reset()}")
+    end
+
+    IO.puts("#{IO.ANSI.yellow()}Confidence: #{confidence * 100}%#{IO.ANSI.reset()}")
+
+    # Show all class probabilities
+    IO.puts("\n#{IO.ANSI.magenta()}Class Probabilities:#{IO.ANSI.reset()}")
+    predicted_probs
+    |> Nx.to_list()
+    |> List.first()
+    |> Enum.with_index()
+    |> Enum.each(fn {prob, class} ->
+      bar_length = trunc(prob * 20)
+      bar = String.duplicate("█", bar_length) <> String.duplicate("░", 20 - bar_length)
+      color = if class == expected_class, do: IO.ANSI.green(), else: ""
+      reset = if class == expected_class, do: IO.ANSI.reset(), else: ""
+      IO.puts("  #{color}#{class}: #{bar} #{Float.round(prob * 100, 1)}%#{reset}")
+    end)
+
+    # Show feature maps if requested
+    if show_feature_maps do
+      IO.puts("\n#{IO.ANSI.cyan()}=== Feature Map Analysis ===#{IO.ANSI.reset()}")
+
+      # Reshape single image for CNN processing
+      cnn_input = case Nx.shape(single_image) do
+        {1, 784} -> Nx.reshape(single_image, {1, 28, 28, 1})
+        _ -> single_image
+      end
+
+      inspect_feature_maps(model, params, cnn_input,
+        layers: layers,
+        max_filters: 6,
+        show_original: false
+      )
+    end
+
+    :ok
+  end
+
   defp find_and_show_failures(model, params, images, labels, remaining_slots) do
     predictions = predict(model, params, images)
     predicted_classes = Nx.argmax(predictions, axis: -1) |> Nx.to_list()

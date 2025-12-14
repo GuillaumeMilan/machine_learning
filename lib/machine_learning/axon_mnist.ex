@@ -46,12 +46,7 @@ defmodule MachineLearning.AxonMnist do
     # sample_input = %{"input" => Nx.iota({1, 784}, type: :f32)}
     {init_fun, _} = Axon.build(model)
 
-    init_fun.(Nx.template({1, 784}, {:f, 32}), %Axon.ModelState{
-      data: %{},
-      parameters: %{},
-      state: %{},
-      frozen_parameters: %{}
-    })
+    init_fun.(Nx.template({1, 784}, {:f, 32}), Axon.ModelState.new(%{}))
   end
 
   @doc """
