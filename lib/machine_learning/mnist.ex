@@ -14,6 +14,7 @@ defmodule MachineLearning.Mnist do
   def load(images_path, labels_path, batch_size \\ 30) do
     content = File.read!(images_path)
     <<_::32, n_images::32, n_rows::32, n_cols::32, images::binary>> = content
+
     train_images =
       images
       |> Nx.from_binary({:u, 8})
@@ -43,7 +44,8 @@ defmodule MachineLearning.Mnist do
     iex> {images, labels} = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte") |> Enum.at(1)
     iex> MachineLearning.Mnist.inspect(images, labels, 0)
   """
-  @spec inspect(images_batch :: Nx.Tensor.t(), labels_batch :: Nx.Tensor.t(), index :: integer) :: {String.t(), Integer.t()}
+  @spec inspect(images_batch :: Nx.Tensor.t(), labels_batch :: Nx.Tensor.t(), index :: integer) ::
+          {String.t(), Integer.t()}
   def inspect(images, labels, index) do
     images
     |> Nx.to_list()
@@ -67,22 +69,52 @@ defmodule MachineLearning.Mnist do
     iex> set = MachineLearning.Mnist.load("./tmp/train-images-idx3-ubyte", "./tmp/train-labels-idx1-ubyte", 30)
     iex> MachineLearning.Mnist.check(model, set)
   """
-  @spec check(MachineLearning.Model.t(), Enumerable.t()) :: :ok
+  @spec check(MachineLearning.Network.t(), Enumerable.t()) :: :ok
   def check(model, set) do
     set
     |> Enum.random()
     |> then(fn {images, labels} ->
       {batch_size, _} = Nx.shape(images)
-      index = Enum.random(0..batch_size - 1)
-      predicted = MachineLearning.Model.predict(model, images)
-      |> Nx.argmax(axis: -1)
-      |> Nx.to_list()
-      |> Enum.at(index)
+      index = Enum.random(0..(batch_size - 1))
+
+      predicted =
+        MachineLearning.Network.predict(model, images)
+        |> Nx.argmax(axis: -1)
+        |> Nx.to_list()
+        |> Enum.at(index)
+
       {display, expected} = MachineLearning.Mnist.inspect(images, labels, index)
       IO.puts(display)
       IO.puts("Expected: #{expected}")
       IO.puts("Predicted: #{predicted}")
     end)
+  end
+
+  def inspect_first_layer(model, index) do
+    weights = model.layers |> List.first() |> Map.get(:weights)
+    max_value = Nx.reduce_max(weights) |> Nx.to_number()
+    min_value = Nx.reduce_min(weights) |> Nx.to_number()
+
+    weights
+    |> Nx.add(-min_value)
+    |> Nx.divide(max_value - min_value)
+    |> Nx.multiply(92 * 2)
+    |> Nx.subtract(92)
+    |> Nx.transpose()
+    |> Nx.to_list()
+    |> Enum.at(index)
+    |> Enum.chunk_every(28)
+    |> Enum.map(fn row ->
+      row
+      |> Enum.map(fn col ->
+        sign = if col >= 0, do: :plus, else: :minus
+        symbole = gray_scale_ascii(abs(round(col)))
+        "#{IO.ANSI.color(color(sign))}#{symbole}"
+      end)
+      |> Enum.join()
+    end)
+    |> Enum.join("\n")
+    |> then(&"#{IO.ANSI.black_background()}#{&1}#{IO.ANSI.reset()}")
   end
 
   defp gray_scale_ascii(scale) do
@@ -91,6 +123,9 @@ defmodule MachineLearning.Mnist do
     |> String.graphemes()
     |> Enum.at(scale)
   end
+
+  defp color(:plus), do: 23
+  defp color(:minus), do: 1
 
   defp label_to_human(label) do
     label

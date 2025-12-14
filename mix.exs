@@ -21,8 +21,10 @@ defmodule MachineLearning.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nx, "~> 0.7.3"},
-      {:exla, "~> 0.7.3"},
+      {:nx, "~> 0.10.0"},
+      {:exla, "~> 0.10.0"},
+      {:image, "~> 0.53.0"},
+      {:axon, "~> 0.8.0"}
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
   end
