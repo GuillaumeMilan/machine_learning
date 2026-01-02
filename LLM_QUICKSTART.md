@@ -22,6 +22,9 @@ vocab = MachineLearning.BytePairEncoding.compress(
 
 # Save vocabulary
 File.write!("vocabulary.bert", :erlang.term_to_binary(vocab))
+
+# Optional: View corpus statistics
+MachineLearning.Corpus.stats("./tmp/corpus")
 ```
 
 ## Step 2: Load Vocabulary and Create Tokenizer
@@ -49,12 +52,30 @@ tokenizer = MachineLearning.Tokenizer.load("tokenizer.bert")
 Tokenize your training texts:
 
 ```elixir
-# Your training texts
+# Option 1: Load texts from your corpus directory
+training_texts = MachineLearning.Corpus.load_sample("./tmp/corpus", 1000)
+
+# Option 2: Load and split by lines (good for code/structured text)
+training_texts = MachineLearning.Corpus.load_split_texts(
+  "./tmp/corpus",
+  split_by: :lines,
+  min_length: 50,
+  max_files: 100
+)
+
+# Option 3: Load and chunk into fixed-size pieces
+training_texts = MachineLearning.Corpus.load_chunked_texts(
+  "./tmp/corpus",
+  chunk_size: 500,
+  overlap: 50,
+  max_files: 100
+)
+
+# Option 4: Manual list of texts
 training_texts = [
   "The quick brown fox jumps over the lazy dog.",
   "Machine learning with Elixir is powerful.",
   "Transformers revolutionized natural language processing.",
-  # ... add more texts
 ]
 
 # Encode texts to token IDs
@@ -146,11 +167,15 @@ tokens = File.read!("vocabulary.bert")
 tokenizer = MachineLearning.Tokenizer.from_vocab(tokens)
 
 # Prepare some training data
-texts = [
-  "Elixir is a functional programming language.",
-  "Machine learning models can learn patterns.",
-  "Transformers use attention mechanisms.",
-]
+# Load from corpus
+texts = MachineLearning.Corpus.load_sample("./tmp/corpus", 50)
+
+# Or use manual texts for testing
+# texts = [
+#   "Elixir is a functional programming language.",
+#   "Machine learning models can learn patterns.",
+#   "Transformers use attention mechanisms.",
+# ]
 
 token_sequences = Enum.map(texts, fn text ->
   MachineLearning.Tokenizer.encode(tokenizer, text, add_special_tokens: true)

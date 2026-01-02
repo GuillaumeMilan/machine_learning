@@ -1,0 +1,9 @@
+{
+  "embed_dim": 128,
+  "ff_dim": 512,
+  "max_seq_len": 128,
+  "num_heads": 4,
+  "num_layers": 2,
+  "saved_at": "2026-01-02T12:54:24.400834Z",
+  "vocab_size": 4005
+}

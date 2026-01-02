@@ -249,6 +249,47 @@ defmodule MachineLearning.Tokenizer do
       end
     end)
     |> Enum.join("")
+    |> sanitize_unicode()
+  end
+
+  # Sanitize the decoded text to ensure valid UTF-8 and printable characters
+  defp sanitize_unicode(text) do
+    # First, try to ensure it's valid UTF-8
+    sanitized =
+      case :unicode.characters_to_binary(text, :utf8, :utf8) do
+        binary when is_binary(binary) -> binary
+        {:error, _, _} -> scrub_invalid_utf8(text)
+        {:incomplete, _, _} -> scrub_invalid_utf8(text)
+      end
+
+    # Then filter out problematic control characters but keep printable Unicode
+    sanitized
+    |> String.graphemes()
+    |> Enum.filter(fn grapheme ->
+      case String.to_charlist(grapheme) do
+        [char] ->
+          # Keep printable ASCII, common whitespace, and valid extended Unicode
+          (char >= 32 and char <= 126) or  # ASCII printable
+          char in [?\n, ?\r, ?\t, ?\s] or  # Whitespace
+          (char >= 160 and char < 0xD800) or  # Valid Unicode (before surrogates)
+          (char > 0xDFFF and char <= 0x10FFFF)  # Valid Unicode (after surrogates)
+
+        _ ->
+          # Multi-codepoint graphemes (like emojis) - keep them
+          true
+      end
+    end)
+    |> Enum.join()
+  end
+
+  # Replace invalid UTF-8 sequences with the replacement character
+  defp scrub_invalid_utf8(binary) do
+    binary
+    |> String.codepoints()
+    |> Enum.map(fn codepoint ->
+      if String.valid?(codepoint), do: codepoint, else: "?"
+    end)
+    |> Enum.join()
   end
 
   @doc """

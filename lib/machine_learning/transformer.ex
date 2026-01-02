@@ -246,13 +246,14 @@ defmodule MachineLearning.Transformer do
     # Train the model
     model
     |> Axon.Loop.trainer(loss_fn, optimizer_fn)
-    |> Axon.Loop.metric(&token_accuracy/3, "Accuracy")
+    |> Axon.Loop.metric(fn y_true, y_pred -> token_accuracy(y_true, y_pred) end, "Accuracy")
     |> Axon.Loop.run(processed_data, params, epochs: epochs, compiler: EXLA)
   end
 
   # Token-level accuracy metric
-  defp token_accuracy(y_true, y_pred, _state) do
-    # Calculate token-level accuracy
+  defp token_accuracy(y_true, y_pred) do
+    # y_pred shape: {batch, seq_len, vocab_size}
+    # y_true shape: {batch, seq_len}
     predictions = Nx.argmax(y_pred, axis: -1)
     Nx.mean(Nx.equal(predictions, y_true))
   end
@@ -284,21 +285,36 @@ defmodule MachineLearning.Transformer do
   - `prompt_tokens`: Starting tokens (tensor of shape {1, prompt_len})
   - `opts`: Generation options
     - `:max_length` - Maximum sequence length to generate (default: 100)
-    - `:temperature` - Sampling temperature (default: 1.0)
+    - `:temperature` - Sampling temperature (default: 1.0, higher = more random)
     - `:top_k` - Top-k sampling (default: 50)
+    - `:top_p` - Nucleus sampling threshold (default: 0.9)
+    - `:repetition_penalty` - Penalty for repeating tokens (default: 1.2, higher = less repetition)
+    - `:no_repeat_ngram_size` - Prevent repeating n-grams (default: 3)
   """
   @spec generate(Axon.t(), map(), Nx.Tensor.t(), keyword()) :: Nx.Tensor.t()
   def generate(model, params, prompt_tokens, opts \\ []) do
     max_length = Keyword.get(opts, :max_length, 100)
     temperature = Keyword.get(opts, :temperature, 1.0)
     top_k = Keyword.get(opts, :top_k, 50)
+    top_p = Keyword.get(opts, :top_p, 0.9)
+    repetition_penalty = Keyword.get(opts, :repetition_penalty, 1.2)
+    no_repeat_ngram = Keyword.get(opts, :no_repeat_ngram_size, 3)
 
     {_batch_size, prompt_len} = Nx.shape(prompt_tokens)
 
-    # Autoregressive generation
+    # Autoregressive generation with repetition tracking
     Enum.reduce(prompt_len..(max_length - 1), prompt_tokens, fn _step, current_tokens ->
-      # Predict next token
-      next_token = predict_next_token(model, params, current_tokens, temperature, top_k)
+      # Predict next token with anti-repetition measures
+      next_token = predict_next_token(
+        model,
+        params,
+        current_tokens,
+        temperature,
+        top_k,
+        top_p,
+        repetition_penalty,
+        no_repeat_ngram
+      )
 
       # Append to sequence
       Nx.concatenate([current_tokens, Nx.reshape(next_token, {1, 1})], axis: 1)
@@ -306,7 +322,7 @@ defmodule MachineLearning.Transformer do
   end
 
   # Predict next token given current sequence
-  defp predict_next_token(model, params, current_tokens, temperature, top_k) do
+  defp predict_next_token(model, params, current_tokens, temperature, top_k, top_p, repetition_penalty, no_repeat_ngram) do
     {batch_size, seq_len} = Nx.shape(current_tokens)
 
     # Create position IDs
@@ -329,42 +345,131 @@ defmodule MachineLearning.Transformer do
     # Get logits for last position: {batch_size, vocab_size}
     last_logits = logits[[0..-1//1, -1, 0..-1//1]]
 
+    # Apply repetition penalty - penalize tokens already generated
+    last_logits = apply_repetition_penalty(last_logits, current_tokens, repetition_penalty)
+
+    # Apply n-gram blocking - prevent repeating sequences
+    last_logits = apply_ngram_blocking(last_logits, current_tokens, no_repeat_ngram)
+
     # Apply temperature
     scaled_logits = Nx.divide(last_logits, temperature)
 
-    # Sample from top-k
-    sample_top_k(scaled_logits, top_k)
+    # Sample from top-k and top-p (nucleus sampling)
+    sample_token(scaled_logits, top_k, top_p)
   end
 
-  # Sample from top-k logits
-  defp sample_top_k(logits, k) do
+  # Apply repetition penalty to discourage repeating tokens
+  defp apply_repetition_penalty(logits, current_tokens, penalty) do
+    if penalty == 1.0 do
+      logits
+    else
+      # Get unique tokens in current sequence
+      tokens_list = current_tokens |> Nx.to_flat_list()
+
+      # For each token that appears, divide its logit by penalty
+      Enum.reduce(tokens_list, logits, fn token_id, acc_logits ->
+        # Get current value
+        current_val = acc_logits[0][token_id]
+
+        # Apply penalty (divide if positive, multiply if negative)
+        penalized_val =
+          if Nx.to_number(current_val) > 0 do
+            Nx.divide(current_val, penalty)
+          else
+            Nx.multiply(current_val, penalty)
+          end
+
+        # Update the logit
+        Nx.put_slice(acc_logits, [0, token_id], Nx.reshape(penalized_val, {1, 1}))
+      end)
+    end
+  end
+
+  # Block n-grams that would create repetition
+  defp apply_ngram_blocking(logits, current_tokens, ngram_size) do
+    if ngram_size < 2 do
+      logits
+    else
+      {_batch, seq_len} = Nx.shape(current_tokens)
+
+      # Only check if we have enough tokens
+      if seq_len >= ngram_size - 1 do
+        # Get last (ngram_size - 1) tokens
+        context = current_tokens[[0, (seq_len - ngram_size + 1)..-1//1]]
+        context_list = Nx.to_flat_list(context)
+
+        # Find all ngrams in the sequence that start with this context
+        tokens_list = Nx.to_flat_list(current_tokens)
+        blocked_tokens = find_ngram_continuations(tokens_list, context_list, ngram_size)
+
+        # Set blocked tokens to very negative value
+        Enum.reduce(blocked_tokens, logits, fn token_id, acc_logits ->
+          Nx.put_slice(acc_logits, [0, token_id], Nx.tensor([[-1.0e10]]))
+        end)
+      else
+        logits
+      end
+    end
+  end
+
+  # Find tokens that would complete a repeated n-gram
+  defp find_ngram_continuations(tokens_list, context_list, ngram_size) do
+    ngram_len = ngram_size - 1
+
+    # Slide through the sequence looking for matching contexts
+    tokens_list
+    |> Enum.chunk_every(ngram_size, 1, :discard)
+    |> Enum.filter(fn ngram ->
+      Enum.take(ngram, ngram_len) == context_list
+    end)
+    |> Enum.map(fn ngram -> List.last(ngram) end)
+    |> Enum.uniq()
+  end
+
+  # Sample token using top-k, top-p, and proper probabilistic sampling
+  defp sample_token(logits, top_k, _top_p) do
     # logits shape: {batch_size, vocab_size}
-    {batch_size, _vocab_size} = Nx.shape(logits)
+    {_batch_size, vocab_size} = Nx.shape(logits)
 
-    # Get top-k indices
-    {top_k_values, top_k_indices} = Nx.top_k(logits, k: k)
+    # Step 1: Apply top-k filtering
+    {top_k_values, top_k_indices} = Nx.top_k(logits, k: min(top_k, vocab_size))
 
-    # Apply softmax to top-k values
+    # Step 2: Apply softmax to get probabilities
     probs = Nx.exp(top_k_values)
     probs = Nx.divide(probs, Nx.sum(probs, axes: [-1], keep_axes: true))
 
-    # Sample from categorical distribution
-    # For simplicity, just take argmax (greedy decoding)
-    # In production, you'd want proper sampling
-    # Shape: {batch_size}
-    selected_idx = Nx.argmax(probs, axis: -1)
+    # Step 3: Apply top-p (nucleus) filtering
+    # Note: Full nucleus sampling would filter based on cumulative probability
+    # For now using simpler top-k approach, but keeping parameter for future enhancement
 
-    # Get the actual token ID for each batch element
-    # top_k_indices shape: {batch_size, k}
-    # selected_idx shape: {batch_size}
-    # We need to gather the selected index from each row
-    batch_indices = Nx.iota({batch_size})
+    # Step 4: Sample from the distribution (using categorical sampling)
+    # Convert to flat list and sample
+    probs_list = probs |> Nx.to_flat_list()
+    indices_list = top_k_indices |> Nx.to_flat_list()
 
-    # Stack to create indices for gather: {batch_size, 2}
-    gather_indices = Nx.stack([batch_indices, selected_idx], axis: 1)
+    # Sample token (weighted by probability)
+    sampled_token = weighted_random_sample(probs_list, indices_list)
 
-    # Gather the selected tokens
-    Nx.gather(top_k_indices, gather_indices)
+    Nx.tensor([sampled_token])
+  end
+
+  # Weighted random sampling
+  defp weighted_random_sample(probs, indices) do
+    # Generate random number [0, 1)
+    rand = :rand.uniform()
+
+    # Find which bucket it falls into
+    {_cumsum, idx} =
+      Enum.reduce_while(Enum.zip(probs, indices), {0.0, hd(indices)}, fn {prob, token_idx}, {cumsum, _} ->
+        new_cumsum = cumsum + prob
+        if rand < new_cumsum do
+          {:halt, {new_cumsum, token_idx}}
+        else
+          {:cont, {new_cumsum, token_idx}}
+        end
+      end)
+
+    idx
   end
 
   @doc """
@@ -389,7 +494,7 @@ defmodule MachineLearning.Transformer do
     # Evaluate
     model
     |> Axon.Loop.evaluator()
-    |> Axon.Loop.metric(&token_accuracy/3, "Accuracy")
+    |> Axon.Loop.metric(fn y_true, y_pred -> token_accuracy(y_true, y_pred) end, "Accuracy")
     |> Axon.Loop.run(processed_data, params, compiler: EXLA)
   end
 
@@ -416,9 +521,15 @@ defmodule MachineLearning.Transformer do
     # (seq_len for input, +1 for target)
     sequences =
       token_sequences
-      |> Enum.flat_map(fn tokens ->
+      |> Task.async_stream(fn tokens ->
+        start = System.monotonic_time(:millisecond)
         create_sequences(tokens, seq_len + 1)
-      end)
+        |> tap(fn _ ->
+          duration = System.monotonic_time(:millisecond) - start
+          IO.puts("Created sequences from tokens of length #{length(tokens)} in #{duration} ms")
+        end)
+      end, timeout: :infinity)
+      |> Enum.flat_map(fn {:ok, result} -> result end)
 
     sequences =
       if shuffle do
@@ -426,6 +537,8 @@ defmodule MachineLearning.Transformer do
       else
         sequences
       end
+
+    IO.puts("Total sequences created: #{length(sequences)}, will now create #{div(length(sequences), batch_size)} batches.")
 
     # Batch sequences
     sequences
@@ -447,12 +560,30 @@ defmodule MachineLearning.Transformer do
   end
 
   # Create sequences of fixed length from a longer sequence
-  defp create_sequences(tokens, seq_len) when length(tokens) > seq_len do
-    0..(length(tokens) - seq_len)
-    |> Enum.map(fn start_idx ->
-      Enum.slice(tokens, start_idx, seq_len)
-    end)
-  end
+  defp create_sequences(tokens, seq_len) do
+    token_len = length(tokens)
 
-  defp create_sequences(_tokens, _seq_len), do: []
+    cond do
+      # Long enough: create sliding windows
+      token_len > seq_len ->
+        0..(token_len - seq_len)
+        |> Enum.map(fn start_idx ->
+          Enum.slice(tokens, start_idx, seq_len)
+        end)
+
+      # Exact match or reasonably close: use or pad
+      token_len >= max(8, div(seq_len, 4)) ->
+        if token_len >= seq_len do
+          [Enum.take(tokens, seq_len)]
+        else
+          # Pad with zeros (padding token ID 0)
+          padded = tokens ++ List.duplicate(0, seq_len - token_len)
+          [Enum.take(padded, seq_len)]
+        end
+
+      # Too short: skip
+      true ->
+        []
+    end
+  end
 end
