@@ -12,6 +12,8 @@ defmodule MachineLearning.BytePairEncoding.Token do
     %__MODULE__{value: "#{left}#{right}"}
   end
 
+  def new(%__MODULE__{} = token), do: token
+
   def new(value) when is_binary(value) do
     %__MODULE__{value: value}
   end

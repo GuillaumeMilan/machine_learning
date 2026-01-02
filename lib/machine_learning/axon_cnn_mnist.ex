@@ -213,7 +213,7 @@ defmodule MachineLearning.AxonCnnMnist do
 
   ## Examples
 
-      iex> test_data = MachineLearning.Mnist.load("./tmp/test-images-idx3-ubyte", "./tmp/test-labels-idx1-ubyte", 32)
+      iex> test_data = MachineLearning.Mnist.load("./tmp/t10k-images.idx3-ubyte", "./tmp/t10k-labels.idx1-ubyte", 32)
       iex> results = MachineLearning.AxonCnnMnist.evaluate(model, trained_params, test_data, show_failures: true)
   """
   @spec evaluate(Axon.t(), map(), Enumerable.t(), keyword()) :: map()
@@ -464,17 +464,20 @@ defmodule MachineLearning.AxonCnnMnist do
     show_original = Keyword.get(opts, :show_original, true)
 
     # Ensure input is in correct format - handle different input shapes
-    formatted_input = case Nx.shape(input_image) do
-      {batch_size, 784} ->
-        # Flattened format, reshape to CNN format
-        Nx.reshape(input_image, {batch_size, 28, 28, 1})
-      {_, 28, 28, 1} ->
-        # Already in CNN format
-        input_image
-      _ ->
-        # Fallback: try to ensure it's in the right format
-        input_image
-    end
+    formatted_input =
+      case Nx.shape(input_image) do
+        {batch_size, 784} ->
+          # Flattened format, reshape to CNN format
+          Nx.reshape(input_image, {batch_size, 28, 28, 1})
+
+        {_, 28, 28, 1} ->
+          # Already in CNN format
+          input_image
+
+        _ ->
+          # Fallback: try to ensure it's in the right format
+          input_image
+      end
 
     if show_original do
       IO.puts("\n#{IO.ANSI.cyan()}=== Original Input Image ===#{IO.ANSI.reset()}")
@@ -486,8 +489,11 @@ defmodule MachineLearning.AxonCnnMnist do
       case extract_layer_activations(model, params, formatted_input, layer_name) do
         {:ok, activations} ->
           display_feature_maps(activations, layer_name, max_filters)
+
         {:error, reason} ->
-          IO.puts("#{IO.ANSI.red()}Failed to extract activations for #{layer_name}: #{reason}#{IO.ANSI.reset()}")
+          IO.puts(
+            "#{IO.ANSI.red()}Failed to extract activations for #{layer_name}: #{reason}#{IO.ANSI.reset()}"
+          )
       end
     end)
 
@@ -506,7 +512,8 @@ defmodule MachineLearning.AxonCnnMnist do
 
   Returns `{:ok, activations}` on success or `{:error, reason}` on failure.
   """
-  @spec extract_layer_activations(Axon.t(), map(), Nx.Tensor.t(), String.t()) :: {:ok, Nx.Tensor.t()} | {:error, String.t()}
+  @spec extract_layer_activations(Axon.t(), map(), Nx.Tensor.t(), String.t()) ::
+          {:ok, Nx.Tensor.t()} | {:error, String.t()}
   def extract_layer_activations(_model, params, input, layer_name) do
     try do
       # For now, we'll create truncated models to extract layer activations
@@ -515,8 +522,9 @@ defmodule MachineLearning.AxonCnnMnist do
       case layer_name do
         "conv1" ->
           # For demonstration, we'll create a truncated model up to conv1
-          truncated_model = Axon.input("input", shape: {nil, 28, 28, 1})
-                           |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
+          truncated_model =
+            Axon.input("input", shape: {nil, 28, 28, 1})
+            |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
 
           {_init_fun, truncated_predict_fun} = Axon.build(truncated_model, mode: :inference)
           activations = truncated_predict_fun.(params, %{"input" => input})
@@ -524,10 +532,11 @@ defmodule MachineLearning.AxonCnnMnist do
 
         "conv2" ->
           # Create model up to conv2
-          truncated_model = Axon.input("input", shape: {nil, 28, 28, 1})
-                           |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
-                           |> Axon.max_pool(kernel_size: 2, name: "pool1")
-                           |> Axon.conv(64, kernel_size: 3, padding: :same, activation: :relu, name: "conv2")
+          truncated_model =
+            Axon.input("input", shape: {nil, 28, 28, 1})
+            |> Axon.conv(32, kernel_size: 3, padding: :same, activation: :relu, name: "conv1")
+            |> Axon.max_pool(kernel_size: 2, name: "pool1")
+            |> Axon.conv(64, kernel_size: 3, padding: :same, activation: :relu, name: "conv2")
 
           {_init_fun, truncated_predict_fun} = Axon.build(truncated_model, mode: :inference)
           activations = truncated_predict_fun.(params, %{"input" => input})
@@ -557,13 +566,18 @@ defmodule MachineLearning.AxonCnnMnist do
     {batch, height, width, channels} = Nx.shape(activations)
 
     IO.puts("\n#{IO.ANSI.yellow()}=== Feature Maps from #{layer_name} ===#{IO.ANSI.reset()}")
-    IO.puts("Shape: {#{batch}, #{height}, #{width}, #{channels}} (batch, height, width, channels)")
+
+    IO.puts(
+      "Shape: {#{batch}, #{height}, #{width}, #{channels}} (batch, height, width, channels)"
+    )
 
     # Display up to max_filters feature maps
     num_filters_to_show = min(channels, max_filters)
 
     for filter_idx <- 0..(num_filters_to_show - 1) do
-      IO.puts("\n#{IO.ANSI.green()}--- Filter #{filter_idx + 1}/#{channels} ---#{IO.ANSI.reset()}")
+      IO.puts(
+        "\n#{IO.ANSI.green()}--- Filter #{filter_idx + 1}/#{channels} ---#{IO.ANSI.reset()}"
+      )
 
       # Extract single filter activation: {1, height, width, 1}
       filter_activation = activations |> Nx.slice_along_axis(filter_idx, 1, axis: 3)
@@ -585,12 +599,13 @@ defmodule MachineLearning.AxonCnnMnist do
     min_val = Nx.reduce_min(feature_map)
     max_val = Nx.reduce_max(feature_map)
 
-    normalized = if Nx.equal(min_val, max_val) |> Nx.to_number() == 1 do
-      Nx.broadcast(0.5, {height, width})
-    else
-      Nx.subtract(feature_map, min_val)
-      |> Nx.divide(Nx.subtract(max_val, min_val))
-    end
+    normalized =
+      if Nx.equal(min_val, max_val) |> Nx.to_number() == 1 do
+        Nx.broadcast(0.5, {height, width})
+      else
+        Nx.subtract(feature_map, min_val)
+        |> Nx.divide(Nx.subtract(max_val, min_val))
+      end
 
     # Convert to list for processing
     feature_list = Nx.to_list(normalized)
@@ -599,10 +614,12 @@ defmodule MachineLearning.AxonCnnMnist do
     chars = " .:-=+*#%@"
 
     Enum.each(feature_list, fn row ->
-      row_str = Enum.map(row, fn pixel ->
-        char_index = min(trunc(pixel * (String.length(chars) - 1)), String.length(chars) - 1)
-        String.at(chars, char_index)
-      end) |> Enum.join("")
+      row_str =
+        Enum.map(row, fn pixel ->
+          char_index = min(trunc(pixel * (String.length(chars) - 1)), String.length(chars) - 1)
+          String.at(chars, char_index)
+        end)
+        |> Enum.join("")
 
       IO.puts(row_str)
     end)
@@ -627,12 +644,17 @@ defmodule MachineLearning.AxonCnnMnist do
     chars = " .'`^\",:;Il!i><~+_-?][}{1)(|\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
 
     Enum.each(image_list, fn row ->
-      row_str = Enum.map(row, fn pixel ->
-        # Clamp pixel value between 0 and 1
-        normalized_pixel = max(0, min(1, pixel))
-        char_index = min(trunc(normalized_pixel * (String.length(chars) - 1)), String.length(chars) - 1)
-        String.at(chars, char_index)
-      end) |> Enum.join("")
+      row_str =
+        Enum.map(row, fn pixel ->
+          # Clamp pixel value between 0 and 1
+          normalized_pixel = max(0, min(1, pixel))
+
+          char_index =
+            min(trunc(normalized_pixel * (String.length(chars) - 1)), String.length(chars) - 1)
+
+          String.at(chars, char_index)
+        end)
+        |> Enum.join("")
 
       IO.puts(row_str)
     end)
@@ -704,11 +726,12 @@ defmodule MachineLearning.AxonCnnMnist do
     test_data = MachineLearning.Mnist.load(test_images_path, test_labels_path, batch_size)
 
     # Select batch and image
-    {images, labels} = if image_index do
-      Enum.at(test_data, image_index)
-    else
-      Enum.random(test_data)
-    end
+    {images, labels} =
+      if image_index do
+        Enum.at(test_data, image_index)
+      else
+        Enum.random(test_data)
+      end
 
     {batch_size, _} = Nx.shape(images)
     index = batch_index || Enum.random(0..(batch_size - 1))
@@ -720,7 +743,13 @@ defmodule MachineLearning.AxonCnnMnist do
     # Make prediction
     predicted_probs = predict(model, params, single_image)
     predicted_class = predicted_probs |> Nx.argmax(axis: -1) |> Nx.squeeze() |> Nx.to_number()
-    confidence = predicted_probs |> Nx.to_list() |> List.first() |> Enum.at(predicted_class) |> Float.round(4)
+
+    confidence =
+      predicted_probs
+      |> Nx.to_list()
+      |> List.first()
+      |> Enum.at(predicted_class)
+      |> Float.round(4)
 
     # Get expected class
     expected_class = single_label |> Nx.argmax(axis: -1) |> Nx.squeeze() |> Nx.to_number()
@@ -744,6 +773,7 @@ defmodule MachineLearning.AxonCnnMnist do
 
     # Show all class probabilities
     IO.puts("\n#{IO.ANSI.magenta()}Class Probabilities:#{IO.ANSI.reset()}")
+
     predicted_probs
     |> Nx.to_list()
     |> List.first()
@@ -761,10 +791,11 @@ defmodule MachineLearning.AxonCnnMnist do
       IO.puts("\n#{IO.ANSI.cyan()}=== Feature Map Analysis ===#{IO.ANSI.reset()}")
 
       # Reshape single image for CNN processing
-      cnn_input = case Nx.shape(single_image) do
-        {1, 784} -> Nx.reshape(single_image, {1, 28, 28, 1})
-        _ -> single_image
-      end
+      cnn_input =
+        case Nx.shape(single_image) do
+          {1, 784} -> Nx.reshape(single_image, {1, 28, 28, 1})
+          _ -> single_image
+        end
 
       inspect_feature_maps(model, params, cnn_input,
         layers: layers,
