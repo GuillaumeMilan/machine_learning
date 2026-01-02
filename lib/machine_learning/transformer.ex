@@ -152,13 +152,160 @@ defmodule MachineLearning.Transformer do
   end
 
   # Causal (masked) self-attention mechanism
-  defp causal_self_attention(input, embed_dim, _num_heads, _dropout_rate, layer_idx) do
-    # Simplified attention - just use dense layers for now
-    # A full implementation would use proper multi-head attention with causal masking
+  defp causal_self_attention(input, embed_dim, num_heads, dropout_rate, layer_idx) do
+    # Proper multi-head attention with causal masking
+    head_dim = div(embed_dim, num_heads)
 
-    input
-    |> Axon.dense(embed_dim, activation: :tanh, name: "attention_transform_#{layer_idx}")
-    |> Axon.dense(embed_dim, name: "attention_output_#{layer_idx}")
+    # Query, Key, Value projections
+    query = Axon.dense(input, embed_dim, name: "query_#{layer_idx}")
+    key = Axon.dense(input, embed_dim, name: "key_#{layer_idx}")
+    value = Axon.dense(input, embed_dim, name: "value_#{layer_idx}")
+
+    # Reshape for multi-head attention: {batch, seq_len, num_heads, head_dim}
+    query = reshape_for_attention(query, num_heads, head_dim, "query_reshape_#{layer_idx}")
+    key = reshape_for_attention(key, num_heads, head_dim, "key_reshape_#{layer_idx}")
+    value = reshape_for_attention(value, num_heads, head_dim, "value_reshape_#{layer_idx}")
+
+    # Scaled dot-product attention with causal mask
+    attention_output = scaled_dot_product_attention(
+      query,
+      key,
+      value,
+      head_dim,
+      dropout_rate,
+      layer_idx
+    )
+
+    # Reshape back: {batch, seq_len, embed_dim}
+    attention_output = reshape_from_attention(attention_output, embed_dim, "attention_reshape_#{layer_idx}")
+
+    # Output projection
+    Axon.dense(attention_output, embed_dim, name: "attention_output_#{layer_idx}")
+  end
+
+  # Reshape tensor for multi-head attention
+  defp reshape_for_attention(tensor, num_heads, head_dim, name) do
+    Axon.layer(
+      fn x, _opts ->
+        {batch, seq_len, _embed_dim} = Nx.shape(x)
+        x
+        |> Nx.reshape({batch, seq_len, num_heads, head_dim})
+        |> Nx.transpose(axes: [0, 2, 1, 3])  # {batch, num_heads, seq_len, head_dim}
+      end,
+      [tensor],
+      name: name,
+      op_name: :reshape_for_attention
+    )
+  end
+
+  # Reshape tensor back from multi-head attention
+  defp reshape_from_attention(tensor, embed_dim, name) do
+    Axon.layer(
+      fn x, _opts ->
+        {batch, _num_heads, seq_len, _head_dim} = Nx.shape(x)
+        x
+        |> Nx.transpose(axes: [0, 2, 1, 3])  # {batch, seq_len, num_heads, head_dim}
+        |> Nx.reshape({batch, seq_len, embed_dim})
+      end,
+      [tensor],
+      name: name,
+      op_name: :reshape_from_attention
+    )
+  end
+
+  # Scaled dot-product attention with causal masking
+  defp scaled_dot_product_attention(query, key, value, head_dim, dropout_rate, layer_idx) do
+    # Compute attention scores: Q * K^T / sqrt(head_dim)
+    scores = Axon.layer(
+      fn q, k, _opts ->
+        # q, k shapes: {batch, num_heads, seq_len, head_dim}
+        {batch, num_heads, seq_len, _head_dim} = Nx.shape(q)
+
+        # Reshape to combine batch and head dimensions
+        # {batch * num_heads, seq_len, head_dim}
+        q_reshaped = Nx.reshape(q, {batch * num_heads, seq_len, head_dim})
+        k_reshaped = Nx.reshape(k, {batch * num_heads, seq_len, head_dim})
+
+        # Transpose k: {batch * num_heads, head_dim, seq_len}
+        k_t = Nx.transpose(k_reshaped, axes: [0, 2, 1])
+
+        # Matrix multiplication with batch dimension
+        # q_reshaped: {batch * num_heads, seq_len, head_dim}
+        # k_t:        {batch * num_heads, head_dim, seq_len}
+        # Contract on head_dim (axis 2 of q, axis 1 of k_t)
+        # Keep batch dimension (axis 0)
+        scores_flat = Nx.dot(q_reshaped, [2], [0], k_t, [1], [0])
+
+        # Reshape back: {batch, num_heads, seq_len, seq_len}
+        scores = Nx.reshape(scores_flat, {batch, num_heads, seq_len, seq_len})
+
+        # Scale by sqrt(head_dim)
+        scale = :math.sqrt(head_dim)
+        Nx.divide(scores, scale)
+      end,
+      [query, key],
+      name: "attention_scores_#{layer_idx}",
+      op_name: :compute_attention_scores
+    )
+
+    # Apply causal mask
+    masked_scores = Axon.layer(
+      fn scores, _opts ->
+        {batch, num_heads, seq_len, _} = Nx.shape(scores)
+
+        # Create causal mask: lower triangular matrix
+        # Use Nx.iota to create efficient mask
+        row_indices = Nx.iota({seq_len, 1})
+        col_indices = Nx.iota({1, seq_len})
+
+        # mask[i, j] = 0 if j <= i, else -inf
+        # This allows position i to attend to positions 0..i
+        mask = Nx.select(
+          Nx.greater(col_indices, row_indices),
+          Nx.Constants.neg_infinity(),
+          0.0
+        )
+
+        # Broadcast mask to match scores shape and add
+        mask = Nx.broadcast(mask, {batch, num_heads, seq_len, seq_len})
+        Nx.add(scores, mask)
+      end,
+      [scores],
+      name: "causal_mask_#{layer_idx}",
+      op_name: :apply_causal_mask
+    )
+
+    # Apply softmax
+    attention_weights = Axon.softmax(masked_scores, axis: -1, name: "attention_softmax_#{layer_idx}")
+
+    # Apply dropout
+    attention_weights = Axon.dropout(attention_weights, rate: dropout_rate, name: "attention_weights_dropout_#{layer_idx}")
+
+    # Apply attention to values: attention_weights * V
+    Axon.layer(
+      fn weights, v, _opts ->
+        # weights: {batch, num_heads, seq_len, seq_len}
+        # v: {batch, num_heads, seq_len, head_dim}
+        {batch, num_heads, seq_len, _} = Nx.shape(weights)
+        {_, _, _, head_dim} = Nx.shape(v)
+
+        # Reshape to combine batch and head dimensions
+        weights_flat = Nx.reshape(weights, {batch * num_heads, seq_len, seq_len})
+        v_flat = Nx.reshape(v, {batch * num_heads, seq_len, head_dim})
+
+        # Matrix multiplication with batch dimension
+        # weights_flat: {batch * num_heads, seq_len, seq_len}
+        # v_flat:       {batch * num_heads, seq_len, head_dim}
+        # Contract on seq_len (axis 2 of weights, axis 1 of v)
+        result_flat = Nx.dot(weights_flat, [2], [0], v_flat, [1], [0])
+
+        # Reshape back: {batch, num_heads, seq_len, head_dim}
+        Nx.reshape(result_flat, {batch, num_heads, seq_len, head_dim})
+      end,
+      [attention_weights, value],
+      name: "attention_apply_#{layer_idx}",
+      op_name: :apply_attention
+    )
   end
 
   @doc """

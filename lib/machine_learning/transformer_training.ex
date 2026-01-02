@@ -86,6 +86,21 @@ defmodule MachineLearning.TransformerTraining do
     {model, params, tokenizer}
   end
 
+  @doc """
+  Generate text using a loaded model.
+
+  ## Parameters
+
+  - `model_tuple`: A tuple `{model, params, tokenizer}` returned by `load/1`
+  - `prompt_text`: The text prompt to start generation from
+  - `opts`: Generation options (same as `Transformer.generate/4`)
+
+  ## Examples
+
+      iex> model_data = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
+      iex> MachineLearning.TransformerTraining.predict(model_data, "The quick brown")
+      "The quick brown fox jumps over..."
+  """
   def predict({model, params, tokenizer}, prompt_text, opts \\ []) do
     prompt_ids = Tokenizer.encode(tokenizer, prompt_text)
     prompt_tensor = Nx.tensor([prompt_ids])
