@@ -269,10 +269,14 @@ defmodule MachineLearning.Tokenizer do
       case String.to_charlist(grapheme) do
         [char] ->
           # Keep printable ASCII, common whitespace, and valid extended Unicode
-          (char >= 32 and char <= 126) or  # ASCII printable
-          char in [?\n, ?\r, ?\t, ?\s] or  # Whitespace
-          (char >= 160 and char < 0xD800) or  # Valid Unicode (before surrogates)
-          (char > 0xDFFF and char <= 0x10FFFF)  # Valid Unicode (after surrogates)
+          # ASCII printable
+          # Whitespace
+          # Valid Unicode (before surrogates)
+          # Valid Unicode (after surrogates)
+          (char >= 32 and char <= 126) or
+            char in [?\n, ?\r, ?\t, ?\s] or
+            (char >= 160 and char < 0xD800) or
+            (char > 0xDFFF and char <= 0x10FFFF)
 
         _ ->
           # Multi-codepoint graphemes (like emojis) - keep them

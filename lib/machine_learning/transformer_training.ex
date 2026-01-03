@@ -30,14 +30,14 @@ defmodule MachineLearning.TransformerTraining do
     IO.puts("Loading model from #{model_dir}...")
 
     # Load model configuration
-    config_path = Path.join(model_dir, "config.json")
+    model_config_path = Path.join(model_dir, "config.json")
 
-    unless File.exists?(config_path) do
-      raise "Model configuration file not found: #{config_path}"
+    unless File.exists?(model_config_path) do
+      raise "Model configuration file not found: #{model_config_path}"
     end
 
-    config =
-      File.read!(config_path)
+    model_config =
+      File.read!(model_config_path)
       |> Jason.decode!()
 
     IO.puts("Loaded model configuration")
@@ -61,24 +61,18 @@ defmodule MachineLearning.TransformerTraining do
 
     params =
       File.read!(params_path)
-      |> :erlang.binary_to_term()
+      |> Nx.deserialize()
 
     IO.puts("Loaded trained parameters")
 
     # Create model with the saved architecture
     model =
-      Transformer.create_model(
-        vocab_size: Tokenizer.vocab_size(tokenizer),
-        max_seq_len: config["max_seq_len"],
-        embed_dim: config["embed_dim"],
-        num_heads: config["num_heads"],
-        num_layers: config["num_layers"],
-        ff_dim: config["ff_dim"] || 512,
-        dropout_rate: config["dropout_rate"] || 0.1
-      )
+      model_config
+      |> model_config_to_model_opts()
+      |> Transformer.create_model()
 
     IO.puts(
-      "Created model with saved architecture: embed_dim=#{config["embed_dim"]}, num_heads=#{config["num_heads"]}, num_layers=#{config["num_layers"]}"
+      "Created model with saved architecture: embed_dim=#{model_config["embed_dim"]}, num_heads=#{model_config["num_heads"]}, num_layers=#{model_config["num_layers"]}"
     )
 
     IO.puts("Model loaded successfully from #{model_dir}\n")
@@ -135,31 +129,11 @@ defmodule MachineLearning.TransformerTraining do
     IO.puts("Step 3: Creating transformer model...")
 
     # Get model config with better defaults
-    # Increased from 128
-    embed_dim = Map.get(config, :embed_dim, 256)
-    # Increased from 4
-    num_heads = Map.get(config, :num_heads, 8)
-    # Increased from 2
-    num_layers = Map.get(config, :num_layers, 4)
-    # Increased from 512
-    ff_dim = Map.get(config, :ff_dim, 1024)
-    # Increased from 128
-    max_seq_len = Map.get(config, :max_seq_len, 256)
-
     model =
-      Transformer.create_model(
-        vocab_size: Tokenizer.vocab_size(tokenizer),
-        max_seq_len: max_seq_len,
-        embed_dim: embed_dim,
-        num_heads: num_heads,
-        num_layers: num_layers,
-        ff_dim: ff_dim,
-        dropout_rate: 0.1
-      )
-
-    IO.puts(
-      "Model created with: embed_dim=#{embed_dim}, heads=#{num_heads}, layers=#{num_layers}\n"
-    )
+      config
+      |> model_config(tokenizer)
+      |> model_config_to_model_opts()
+      |> Transformer.create_model()
 
     # Step 4: Initialize parameters
     IO.puts("Step 4: Initializing model parameters...")
@@ -200,8 +174,15 @@ defmodule MachineLearning.TransformerTraining do
     {model, trained_params, tokenizer}
   end
 
-  def run_on_model(model_dir, config \\ %{}) do
-    {model, params, tokenizer} = load(model_dir)
+  def run_on_model(model) do
+    run_on_model(model, %{})
+  end
+
+  def run_on_model(model_dir, config) when is_binary(model_dir) do
+    run_on_model(load(model_dir), config)
+  end
+
+  def run_on_model({model, params, tokenizer}, config) do
     {train_data, sample_texts, _all_texts} = prepare_training_data(tokenizer, config)
     epoch = Map.get(config, :epoch, 10)
     learning_rate = Map.get(config, :learning_rate, 0.001)
@@ -242,6 +223,7 @@ defmodule MachineLearning.TransformerTraining do
   defp prepare_training_data(tokenizer, config) do
     corpus_dir = Map.get(config, :corpus_dir, nil)
     sample_size = Map.get(config, :sample_size, nil)
+    log_level = Map.get(config, :log_level, :info)
 
     # Try to load from corpus, otherwise use sample texts
     all_texts =
@@ -250,10 +232,10 @@ defmodule MachineLearning.TransformerTraining do
           raise "Corpus directory not found: #{corpus_dir}"
         end
 
-        IO.puts("Loading all texts from corpus directory...")
+        log_info("Loading all texts from corpus directory...", log_level)
         MachineLearning.Corpus.load_texts(corpus_dir)
       else
-        IO.puts("Corpus not found, using sample texts...")
+        log_info("Corpus not found, using sample texts...", log_level)
 
         [
           "The quick brown fox jumps over the lazy dog in the beautiful forest.",
@@ -269,18 +251,30 @@ defmodule MachineLearning.TransformerTraining do
         ]
       end
 
-    IO.puts("Loaded #{length(all_texts)} total texts from corpus")
+    log_info("Loaded #{length(all_texts)} total texts from corpus", log_level)
 
     # Sample from the corpus if sample_size is specified
     sample_texts =
       if sample_size && sample_size < length(all_texts) do
-        IO.puts("Sampling #{sample_size} texts for training...")
+        log_info("Sampling #{sample_size} texts for training...", log_level)
         Enum.take_random(all_texts, sample_size)
       else
         all_texts
       end
 
-    IO.puts("Using #{length(sample_texts)} texts for training")
+    log_info("Using #{length(sample_texts)} texts for training", log_level)
+
+    if corpus_dir do
+      log_debug("Sample texts (first lines):", log_level)
+
+      sample_texts_first_lines =
+        Enum.map(sample_texts, fn text ->
+          text |> String.split("\n") |> List.first()
+        end)
+        |> Enum.join("\n")
+
+      log_debug(sample_texts_first_lines, log_level)
+    end
 
     # Encode texts to token sequences
     token_sequences =
@@ -296,14 +290,14 @@ defmodule MachineLearning.TransformerTraining do
           |> tap(fn _ ->
             text_size = chunk |> Enum.map(&String.length/1) |> Enum.sum()
             duration = System.monotonic_time(:millisecond) - start
-            IO.puts("Tokenized text of length #{text_size} in #{duration} ms")
+            log_debug("Tokenized text of length #{text_size} in #{duration} ms", log_level)
           end)
         end,
         timeout: :infinity
       )
       |> Enum.flat_map(fn {:ok, result} -> result end)
 
-    IO.puts("Tokenized training data with #{Enum.count(token_sequences)} sequences.")
+    log_info("Tokenized training data with #{Enum.count(token_sequences)} sequences.", log_level)
     # Increased from 4 for more stable gradients
     batch_size = Map.get(config, :batch_size, 16)
     # Increased from 32 for better context
@@ -317,7 +311,7 @@ defmodule MachineLearning.TransformerTraining do
         shuffle: true
       )
 
-    IO.puts("Prepared training data with #{Enum.count(train_data)} batches.")
+    log_info("Prepared training data with #{Enum.count(train_data)} batches.", log_level)
 
     {train_data, sample_texts, all_texts}
   end
@@ -386,13 +380,63 @@ defmodule MachineLearning.TransformerTraining do
     tokenizer_path = Path.join(save_dir, "tokenizer.bert")
     Tokenizer.save(tokenizer, tokenizer_path)
 
-    # Save trained parameters
+    # Save trained parameters using Nx.serialize
     params_path = Path.join(save_dir, "params.bin")
-    binary_params = :erlang.term_to_binary(params)
-    File.write!(params_path, binary_params)
+    serialized_params = Nx.serialize(params)
+    File.write!(params_path, serialized_params)
 
     IO.puts("Model and tokenizer saved successfully in: #{save_dir}")
 
     save_dir
+  end
+
+  defp log_level(:debug), do: 3
+  defp log_level(:info), do: 2
+  defp log_level(:warn), do: 1
+  defp log_level(:error), do: 0
+
+  def log_debug(message, current_level), do: log(message, :debug, current_level)
+  def log_info(message, current_level), do: log(message, :info, current_level)
+  def log_warn(message, current_level), do: log(message, :warn, current_level)
+
+  defp log(message, level, current_level) do
+    if log_level(level) <= log_level(current_level) do
+      IO.puts("[#{String.upcase(to_string(level))}] #{message}")
+    end
+  end
+
+  defp model_config(config, tokenizer) do
+    %{
+      "max_seq_len" => Map.get(config, :max_seq_len, 256),
+      "embed_dim" => Map.get(config, :embed_dim, 256),
+      "num_heads" => Map.get(config, :num_heads, 8),
+      "num_layers" => Map.get(config, :num_layers, 4),
+      "ff_dim" => Map.get(config, :ff_dim, 1024),
+      "vocab_size" => Tokenizer.vocab_size(tokenizer),
+      "saved_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+  end
+
+  defp model_config_to_model_opts(model_config) do
+    embed_dim = Map.fetch!(model_config, "embed_dim")
+    num_heads = Map.fetch!(model_config, "num_heads")
+    num_layers = Map.fetch!(model_config, "num_layers")
+    ff_dim = Map.fetch!(model_config, "ff_dim")
+    max_seq_len = Map.fetch!(model_config, "max_seq_len")
+    vocab_size = Map.fetch!(model_config, "vocab_size")
+
+    IO.puts(
+      "Model opts created with: embed_dim=#{embed_dim}, heads=#{num_heads}, layers=#{num_layers}\n"
+    )
+
+    [
+      vocab_size: vocab_size,
+      max_seq_len: max_seq_len,
+      embed_dim: embed_dim,
+      num_heads: num_heads,
+      num_layers: num_layers,
+      ff_dim: ff_dim,
+      dropout_rate: 0.1
+    ]
   end
 end

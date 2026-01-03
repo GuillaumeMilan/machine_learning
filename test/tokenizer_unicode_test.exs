@@ -27,7 +27,8 @@ defmodule MachineLearning.TokenizerUnicodeTest do
     test "sanitizes invalid UTF-8 byte sequences" do
       # Create tokens with invalid UTF-8 sequences
       # These are raw bytes that don't form valid UTF-8
-      invalid_utf8_bytes = <<255, 254, 253>>  # Invalid UTF-8
+      # Invalid UTF-8
+      invalid_utf8_bytes = <<255, 254, 253>>
 
       tokens = [
         Token.new("<PAD>"),
@@ -59,11 +60,16 @@ defmodule MachineLearning.TokenizerUnicodeTest do
         Token.new("<BOS>"),
         Token.new("<EOS>"),
         Token.new("Hello"),
-        Token.new(<<0>>),  # NULL character (should be filtered)
-        Token.new(<<1>>),  # SOH character (should be filtered)
-        Token.new(" "),    # Space (should be kept)
-        Token.new("\n"),   # Newline (should be kept)
-        Token.new("\t"),   # Tab (should be kept)
+        # NULL character (should be filtered)
+        Token.new(<<0>>),
+        # SOH character (should be filtered)
+        Token.new(<<1>>),
+        # Space (should be kept)
+        Token.new(" "),
+        # Newline (should be kept)
+        Token.new("\n"),
+        # Tab (should be kept)
+        Token.new("\t"),
         Token.new("world")
       ]
 
@@ -89,9 +95,12 @@ defmodule MachineLearning.TokenizerUnicodeTest do
         Token.new(" of"),
         Token.new(" AI"),
         # Invalid UTF-8 sequences that might come from model generation
-        Token.new(<<194, 191>>),  # Incomplete UTF-8
-        Token.new(<<224, 184, 138>>),  # Valid Thai character
-        Token.new(<<250, 195>>),  # Invalid UTF-8
+        # Incomplete UTF-8
+        Token.new(<<194, 191>>),
+        # Valid Thai character
+        Token.new(<<224, 184, 138>>),
+        # Invalid UTF-8
+        Token.new(<<250, 195>>),
         Token.new("is")
       ]
 
@@ -116,11 +125,14 @@ defmodule MachineLearning.TokenizerUnicodeTest do
         Token.new("<EOS>"),
         Token.new("Hello"),
         Token.new(" "),
-        Token.new("世界"),  # Chinese characters
+        # Chinese characters
+        Token.new("世界"),
         Token.new(" "),
-        Token.new("🌍"),   # Emoji
+        # Emoji
+        Token.new("🌍"),
         Token.new(" "),
-        Token.new("Ω")     # Greek letter
+        # Greek letter
+        Token.new("Ω")
       ]
 
       tokenizer = Tokenizer.from_vocab(tokens, add_special_tokens: false)

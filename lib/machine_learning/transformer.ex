@@ -167,17 +167,19 @@ defmodule MachineLearning.Transformer do
     value = reshape_for_attention(value, num_heads, head_dim, "value_reshape_#{layer_idx}")
 
     # Scaled dot-product attention with causal mask
-    attention_output = scaled_dot_product_attention(
-      query,
-      key,
-      value,
-      head_dim,
-      dropout_rate,
-      layer_idx
-    )
+    attention_output =
+      scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        head_dim,
+        dropout_rate,
+        layer_idx
+      )
 
     # Reshape back: {batch, seq_len, embed_dim}
-    attention_output = reshape_from_attention(attention_output, embed_dim, "attention_reshape_#{layer_idx}")
+    attention_output =
+      reshape_from_attention(attention_output, embed_dim, "attention_reshape_#{layer_idx}")
 
     # Output projection
     Axon.dense(attention_output, embed_dim, name: "attention_output_#{layer_idx}")
@@ -188,9 +190,11 @@ defmodule MachineLearning.Transformer do
     Axon.layer(
       fn x, _opts ->
         {batch, seq_len, _embed_dim} = Nx.shape(x)
+
         x
         |> Nx.reshape({batch, seq_len, num_heads, head_dim})
-        |> Nx.transpose(axes: [0, 2, 1, 3])  # {batch, num_heads, seq_len, head_dim}
+        # {batch, num_heads, seq_len, head_dim}
+        |> Nx.transpose(axes: [0, 2, 1, 3])
       end,
       [tensor],
       name: name,
@@ -203,8 +207,10 @@ defmodule MachineLearning.Transformer do
     Axon.layer(
       fn x, _opts ->
         {batch, _num_heads, seq_len, _head_dim} = Nx.shape(x)
+
         x
-        |> Nx.transpose(axes: [0, 2, 1, 3])  # {batch, seq_len, num_heads, head_dim}
+        # {batch, seq_len, num_heads, head_dim}
+        |> Nx.transpose(axes: [0, 2, 1, 3])
         |> Nx.reshape({batch, seq_len, embed_dim})
       end,
       [tensor],
@@ -216,70 +222,78 @@ defmodule MachineLearning.Transformer do
   # Scaled dot-product attention with causal masking
   defp scaled_dot_product_attention(query, key, value, head_dim, dropout_rate, layer_idx) do
     # Compute attention scores: Q * K^T / sqrt(head_dim)
-    scores = Axon.layer(
-      fn q, k, _opts ->
-        # q, k shapes: {batch, num_heads, seq_len, head_dim}
-        {batch, num_heads, seq_len, _head_dim} = Nx.shape(q)
+    scores =
+      Axon.layer(
+        fn q, k, _opts ->
+          # q, k shapes: {batch, num_heads, seq_len, head_dim}
+          {batch, num_heads, seq_len, _head_dim} = Nx.shape(q)
 
-        # Reshape to combine batch and head dimensions
-        # {batch * num_heads, seq_len, head_dim}
-        q_reshaped = Nx.reshape(q, {batch * num_heads, seq_len, head_dim})
-        k_reshaped = Nx.reshape(k, {batch * num_heads, seq_len, head_dim})
+          # Reshape to combine batch and head dimensions
+          # {batch * num_heads, seq_len, head_dim}
+          q_reshaped = Nx.reshape(q, {batch * num_heads, seq_len, head_dim})
+          k_reshaped = Nx.reshape(k, {batch * num_heads, seq_len, head_dim})
 
-        # Transpose k: {batch * num_heads, head_dim, seq_len}
-        k_t = Nx.transpose(k_reshaped, axes: [0, 2, 1])
+          # Transpose k: {batch * num_heads, head_dim, seq_len}
+          k_t = Nx.transpose(k_reshaped, axes: [0, 2, 1])
 
-        # Matrix multiplication with batch dimension
-        # q_reshaped: {batch * num_heads, seq_len, head_dim}
-        # k_t:        {batch * num_heads, head_dim, seq_len}
-        # Contract on head_dim (axis 2 of q, axis 1 of k_t)
-        # Keep batch dimension (axis 0)
-        scores_flat = Nx.dot(q_reshaped, [2], [0], k_t, [1], [0])
+          # Matrix multiplication with batch dimension
+          # q_reshaped: {batch * num_heads, seq_len, head_dim}
+          # k_t:        {batch * num_heads, head_dim, seq_len}
+          # Contract on head_dim (axis 2 of q, axis 1 of k_t)
+          # Keep batch dimension (axis 0)
+          scores_flat = Nx.dot(q_reshaped, [2], [0], k_t, [1], [0])
 
-        # Reshape back: {batch, num_heads, seq_len, seq_len}
-        scores = Nx.reshape(scores_flat, {batch, num_heads, seq_len, seq_len})
+          # Reshape back: {batch, num_heads, seq_len, seq_len}
+          scores = Nx.reshape(scores_flat, {batch, num_heads, seq_len, seq_len})
 
-        # Scale by sqrt(head_dim)
-        scale = :math.sqrt(head_dim)
-        Nx.divide(scores, scale)
-      end,
-      [query, key],
-      name: "attention_scores_#{layer_idx}",
-      op_name: :compute_attention_scores
-    )
+          # Scale by sqrt(head_dim)
+          scale = :math.sqrt(head_dim)
+          Nx.divide(scores, scale)
+        end,
+        [query, key],
+        name: "attention_scores_#{layer_idx}",
+        op_name: :compute_attention_scores
+      )
 
     # Apply causal mask
-    masked_scores = Axon.layer(
-      fn scores, _opts ->
-        {batch, num_heads, seq_len, _} = Nx.shape(scores)
+    masked_scores =
+      Axon.layer(
+        fn scores, _opts ->
+          {batch, num_heads, seq_len, _} = Nx.shape(scores)
 
-        # Create causal mask: lower triangular matrix
-        # Use Nx.iota to create efficient mask
-        row_indices = Nx.iota({seq_len, 1})
-        col_indices = Nx.iota({1, seq_len})
+          # Create causal mask: lower triangular matrix
+          # Use Nx.iota to create efficient mask
+          row_indices = Nx.iota({seq_len, 1})
+          col_indices = Nx.iota({1, seq_len})
 
-        # mask[i, j] = 0 if j <= i, else -inf
-        # This allows position i to attend to positions 0..i
-        mask = Nx.select(
-          Nx.greater(col_indices, row_indices),
-          Nx.Constants.neg_infinity(),
-          0.0
-        )
+          # mask[i, j] = 0 if j <= i, else -inf
+          # This allows position i to attend to positions 0..i
+          mask =
+            Nx.select(
+              Nx.greater(col_indices, row_indices),
+              Nx.Constants.neg_infinity(),
+              0.0
+            )
 
-        # Broadcast mask to match scores shape and add
-        mask = Nx.broadcast(mask, {batch, num_heads, seq_len, seq_len})
-        Nx.add(scores, mask)
-      end,
-      [scores],
-      name: "causal_mask_#{layer_idx}",
-      op_name: :apply_causal_mask
-    )
+          # Broadcast mask to match scores shape and add
+          mask = Nx.broadcast(mask, {batch, num_heads, seq_len, seq_len})
+          Nx.add(scores, mask)
+        end,
+        [scores],
+        name: "causal_mask_#{layer_idx}",
+        op_name: :apply_causal_mask
+      )
 
     # Apply softmax
-    attention_weights = Axon.softmax(masked_scores, axis: -1, name: "attention_softmax_#{layer_idx}")
+    attention_weights =
+      Axon.softmax(masked_scores, axis: -1, name: "attention_softmax_#{layer_idx}")
 
     # Apply dropout
-    attention_weights = Axon.dropout(attention_weights, rate: dropout_rate, name: "attention_weights_dropout_#{layer_idx}")
+    attention_weights =
+      Axon.dropout(attention_weights,
+        rate: dropout_rate,
+        name: "attention_weights_dropout_#{layer_idx}"
+      )
 
     # Apply attention to values: attention_weights * V
     Axon.layer(
@@ -452,16 +466,17 @@ defmodule MachineLearning.Transformer do
     # Autoregressive generation with repetition tracking
     Enum.reduce(prompt_len..(max_length - 1), prompt_tokens, fn _step, current_tokens ->
       # Predict next token with anti-repetition measures
-      next_token = predict_next_token(
-        model,
-        params,
-        current_tokens,
-        temperature,
-        top_k,
-        top_p,
-        repetition_penalty,
-        no_repeat_ngram
-      )
+      next_token =
+        predict_next_token(
+          model,
+          params,
+          current_tokens,
+          temperature,
+          top_k,
+          top_p,
+          repetition_penalty,
+          no_repeat_ngram
+        )
 
       # Append to sequence
       Nx.concatenate([current_tokens, Nx.reshape(next_token, {1, 1})], axis: 1)
@@ -469,7 +484,16 @@ defmodule MachineLearning.Transformer do
   end
 
   # Predict next token given current sequence
-  defp predict_next_token(model, params, current_tokens, temperature, top_k, top_p, repetition_penalty, no_repeat_ngram) do
+  defp predict_next_token(
+         model,
+         params,
+         current_tokens,
+         temperature,
+         top_k,
+         top_p,
+         repetition_penalty,
+         no_repeat_ngram
+       ) do
     {batch_size, seq_len} = Nx.shape(current_tokens)
 
     # Create position IDs
@@ -607,8 +631,10 @@ defmodule MachineLearning.Transformer do
 
     # Find which bucket it falls into
     {_cumsum, idx} =
-      Enum.reduce_while(Enum.zip(probs, indices), {0.0, hd(indices)}, fn {prob, token_idx}, {cumsum, _} ->
+      Enum.reduce_while(Enum.zip(probs, indices), {0.0, hd(indices)}, fn {prob, token_idx},
+                                                                         {cumsum, _} ->
         new_cumsum = cumsum + prob
+
         if rand < new_cumsum do
           {:halt, {new_cumsum, token_idx}}
         else
@@ -668,14 +694,18 @@ defmodule MachineLearning.Transformer do
     # (seq_len for input, +1 for target)
     sequences =
       token_sequences
-      |> Task.async_stream(fn tokens ->
-        start = System.monotonic_time(:millisecond)
-        create_sequences(tokens, seq_len + 1)
-        |> tap(fn _ ->
-          duration = System.monotonic_time(:millisecond) - start
-          IO.puts("Created sequences from tokens of length #{length(tokens)} in #{duration} ms")
-        end)
-      end, timeout: :infinity)
+      |> Task.async_stream(
+        fn tokens ->
+          start = System.monotonic_time(:millisecond)
+
+          create_sequences(tokens, seq_len + 1)
+          |> tap(fn _ ->
+            duration = System.monotonic_time(:millisecond) - start
+            IO.puts("Created sequences from tokens of length #{length(tokens)} in #{duration} ms")
+          end)
+        end,
+        timeout: :infinity
+      )
       |> Enum.flat_map(fn {:ok, result} -> result end)
 
     sequences =
@@ -685,7 +715,9 @@ defmodule MachineLearning.Transformer do
         sequences
       end
 
-    IO.puts("Total sequences created: #{length(sequences)}, will now create #{div(length(sequences), batch_size)} batches.")
+    IO.puts(
+      "Total sequences created: #{length(sequences)}, will now create #{div(length(sequences), batch_size)} batches."
+    )
 
     # Batch sequences
     sequences

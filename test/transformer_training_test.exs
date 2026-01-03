@@ -16,7 +16,8 @@ defmodule MachineLearning.TransformerTrainingTest do
       config = %{
         vocab_path: "vocabulary.bert",
         corpus_dir: nil,
-        seq_len: 16,  # Use shorter sequences for test data
+        # Use shorter sequences for test data
+        seq_len: 16,
         batch_size: 2
       }
 
@@ -116,7 +117,8 @@ defmodule MachineLearning.TransformerTrainingTest do
       config = %{
         vocab_path: "vocabulary.bert",
         corpus_dir: corpus_dir,
-        seq_len: 16,  # Use shorter sequences for test data
+        # Use shorter sequences for test data
+        seq_len: 16,
         batch_size: 2
       }
 

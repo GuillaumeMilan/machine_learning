@@ -22,7 +22,8 @@ defmodule MachineLearning.TransformerSaveLoadTest do
         corpus_dir: nil,
         epoch: 1,
         save_dir: save_dir,
-        seq_len: 16,  # Use shorter sequences for test data
+        # Use shorter sequences for test data
+        seq_len: 16,
         batch_size: 2
       }
 
@@ -45,11 +46,16 @@ defmodule MachineLearning.TransformerSaveLoadTest do
         |> Jason.decode!()
 
       # Check saved configuration matches new defaults or passed config
-      assert config_json["max_seq_len"] == 256  # New default
-      assert config_json["embed_dim"] == 256    # New default
-      assert config_json["num_heads"] == 8      # New default
-      assert config_json["num_layers"] == 4     # New default
-      assert config_json["ff_dim"] == 1024      # New default
+      # New default
+      assert config_json["max_seq_len"] == 256
+      # New default
+      assert config_json["embed_dim"] == 256
+      # New default
+      assert config_json["num_heads"] == 8
+      # New default
+      assert config_json["num_layers"] == 4
+      # New default
+      assert config_json["ff_dim"] == 1024
       assert is_integer(config_json["vocab_size"])
       assert config_json["vocab_size"] > 0
       assert is_binary(config_json["saved_at"])
@@ -78,9 +84,12 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       assert load_output =~ "Loaded tokenizer with vocabulary size:"
       assert load_output =~ "Loaded trained parameters"
       assert load_output =~ "Created model with saved architecture"
-      assert load_output =~ "embed_dim=256"  # New default
-      assert load_output =~ "num_heads=8"    # New default
-      assert load_output =~ "num_layers=4"   # New default
+      # New default
+      assert load_output =~ "embed_dim=256"
+      # New default
+      assert load_output =~ "num_heads=8"
+      # New default
+      assert load_output =~ "num_layers=4"
       assert load_output =~ "Model loaded successfully"
     end
 
