@@ -3,96 +3,21 @@ defmodule MachineLearning.TransformerTraining do
   Complete example of training a transformer language model.
   """
   alias MachineLearning.Tokenizer
-  alias MachineLearning.Transformer
+  alias MachineLearning.Transformer.Backend
   alias MachineLearning.Transformer.Model
-
-  @doc """
-  Load a trained model and tokenizer from a directory.
-
-  ## Parameters
-
-  - `model_dir`: Path to the directory containing saved model files
-
-  ## Returns
-
-  A `MachineLearning.Transformer.Model` struct containing the loaded model, trained parameters, tokenizer,
-  configuration, and the folder path. The model configuration is automatically loaded from the saved `config.json` file.
-
-  ## Examples
-
-      iex> model = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
-      iex> # Generate text
-      iex> prompt_ids = Tokenizer.encode(model.tokenizer, "The quick brown")
-      iex> prompt_tensor = Nx.tensor([prompt_ids])
-      iex> generated_ids = Transformer.generate(model.model, model.params, prompt_tensor, max_length: 20)
-      iex> generated_text = Tokenizer.decode(model.tokenizer, generated_ids)
-  """
-  def load(model_dir) do
-    IO.puts("Loading model from #{model_dir}...")
-
-    # Load model configuration
-    model_config_path = Path.join(model_dir, "config.json")
-
-    unless File.exists?(model_config_path) do
-      raise "Model configuration file not found: #{model_config_path}"
-    end
-
-    model_config =
-      File.read!(model_config_path)
-      |> Jason.decode!()
-
-    IO.puts("Loaded model configuration")
-
-    # Load tokenizer
-    tokenizer_path = Path.join(model_dir, "tokenizer.bert")
-
-    unless File.exists?(tokenizer_path) do
-      raise "Tokenizer file not found: #{tokenizer_path}"
-    end
-
-    tokenizer = Tokenizer.load(tokenizer_path)
-    IO.puts("Loaded tokenizer with vocabulary size: #{Tokenizer.vocab_size(tokenizer)}")
-
-    # Load parameters
-    params_path = Path.join(model_dir, "params.bin")
-
-    unless File.exists?(params_path) do
-      raise "Parameters file not found: #{params_path}"
-    end
-
-    params =
-      File.read!(params_path)
-      |> Nx.deserialize()
-
-    IO.puts("Loaded trained parameters")
-
-    # Create model with the saved architecture
-    model =
-      model_config
-      |> model_config_to_model_opts()
-      |> Transformer.create_model()
-
-    IO.puts(
-      "Created model with saved architecture: embed_dim=#{model_config["embed_dim"]}, num_heads=#{model_config["num_heads"]}, num_layers=#{model_config["num_layers"]}"
-    )
-
-    IO.puts("Model loaded successfully from #{model_dir}\n")
-
-    Model.new(model, params, tokenizer, model_config, model_dir)
-  end
 
   @doc """
   Generate text using a loaded model.
 
   ## Parameters
 
-  - `model_struct`: A `MachineLearning.Transformer.Model` struct returned by `load/1`
+  - `model_struct`: A `MachineLearning.Backend.Model` struct returned by `load/1`
   - `prompt_text`: The text prompt to start generation from
-  - `opts`: Generation options (same as `Transformer.generate/4`)
+  - `opts`: Generation options (same as `Backend.generate/4`)
 
   ## Examples
 
-      iex> model = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
+      iex> model = MachineLearning.Backend.Model.load("models/transformer_1735862400")
       iex> MachineLearning.TransformerTraining.predict(model, "The quick brown")
       "The quick brown fox jumps over..."
   """
@@ -101,7 +26,7 @@ defmodule MachineLearning.TransformerTraining do
     prompt_tensor = Nx.tensor([prompt_ids])
 
     generated_ids =
-      Transformer.generate(model_struct.model, model_struct.params, prompt_tensor,
+      Backend.generate(model_struct.model, model_struct.params, prompt_tensor,
         max_length: Keyword.get(opts, :max_length, 50),
         temperature: Keyword.get(opts, :temperature, 0.9),
         top_k: Keyword.get(opts, :top_k, 40),
@@ -134,13 +59,13 @@ defmodule MachineLearning.TransformerTraining do
       config
       |> model_config(tokenizer)
       |> model_config_to_model_opts()
-      |> Transformer.create_model()
+      |> Backend.create_model()
 
     # Step 4: Initialize parameters
     IO.puts("Step 4: Initializing model parameters...")
     # Increased from 64
     seq_len = Map.get(config, :seq_len, 128)
-    params = Transformer.init_params(model, seq_len: seq_len)
+    params = Backend.init_params(model, seq_len: seq_len)
     IO.puts("Parameters initialized.\n")
 
     # Step 5: Train the model with improved hyperparameters
@@ -153,7 +78,7 @@ defmodule MachineLearning.TransformerTraining do
     learning_rate = Map.get(config, :learning_rate, 0.001)
 
     trained_params =
-      Transformer.train(model, params, train_data,
+      Backend.train(model, params, train_data,
         epochs: epoch,
         learning_rate: learning_rate
       )
@@ -180,7 +105,7 @@ defmodule MachineLearning.TransformerTraining do
   end
 
   def run_on_model(model_dir, config) when is_binary(model_dir) do
-    run_on_model(load(model_dir), config)
+    run_on_model(Model.load(model_dir), config)
   end
 
   def run_on_model(%Model{} = model_struct, config) do
@@ -189,13 +114,16 @@ defmodule MachineLearning.TransformerTraining do
     learning_rate = Map.get(config, :learning_rate, 0.001)
 
     trained_params =
-      Transformer.train(model_struct.model, model_struct.params, train_data,
+      Backend.train(model_struct.model, model_struct.params, train_data,
         epochs: epoch,
         learning_rate: learning_rate
       )
 
     generate_samples(model_struct.model, trained_params, model_struct.tokenizer, sample_texts)
-    {save_dir, model_config} = save_model_and_tokenizer(model_struct.tokenizer, trained_params, config)
+
+    {save_dir, model_config} =
+      save_model_and_tokenizer(model_struct.tokenizer, trained_params, config)
+
     IO.puts("Saved to directory: #{save_dir}\n")
 
     IO.puts("\n=== Training Complete ===")
@@ -306,7 +234,7 @@ defmodule MachineLearning.TransformerTraining do
 
     # Prepare batched training data
     train_data =
-      Transformer.prepare_training_data(token_sequences,
+      Backend.prepare_training_data(token_sequences,
         batch_size: batch_size,
         seq_len: seq_len,
         shuffle: true
@@ -334,7 +262,7 @@ defmodule MachineLearning.TransformerTraining do
 
       # Generate with anti-repetition settings
       generated_ids =
-        Transformer.generate(model, params, prompt_tensor,
+        Backend.generate(model, params, prompt_tensor,
           max_length: 50,
           # Higher for more diversity
           temperature: 0.9,

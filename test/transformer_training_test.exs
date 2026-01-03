@@ -52,7 +52,10 @@ defmodule MachineLearning.TransformerTrainingTest do
       # Each text needs to be long enough to create valid training sequences
       File.write!(
         Path.join(corpus_dir, "sample1.txt"),
-        String.duplicate("The quick brown fox jumps over the lazy dog in the forest near the river. ", 2)
+        String.duplicate(
+          "The quick brown fox jumps over the lazy dog in the forest near the river. ",
+          2
+        )
       )
 
       # File.write!(

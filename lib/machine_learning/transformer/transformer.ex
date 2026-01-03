@@ -1,4 +1,4 @@
-defmodule MachineLearning.Transformer do
+defmodule MachineLearning.Transformer.Backend do
   @moduledoc """
   Transformer decoder architecture for language modeling using Axon.
 
@@ -12,7 +12,7 @@ defmodule MachineLearning.Transformer do
   ## Example Usage
 
       # Create a transformer model
-      model = MachineLearning.Transformer.create_model(
+      model = MachineLearning.Transformer.Backend.create_model(
         vocab_size: 5000,
         max_seq_len: 512,
         embed_dim: 256,
@@ -22,10 +22,10 @@ defmodule MachineLearning.Transformer do
       )
 
       # Initialize parameters
-      params = MachineLearning.Transformer.init_params(model)
+      params = MachineLearning.Transformer.Backend.init_params(model)
 
       # Train the model
-      trained_params = MachineLearning.Transformer.train(
+      trained_params = MachineLearning.Transformer.Backend.train(
         model,
         params,
         train_data,
@@ -33,7 +33,7 @@ defmodule MachineLearning.Transformer do
       )
 
       # Generate text
-      MachineLearning.Transformer.generate(
+      MachineLearning.Transformer.Backend.generate(
         model,
         trained_params,
         prompt_tokens,
@@ -57,7 +57,7 @@ defmodule MachineLearning.Transformer do
 
   ## Examples
 
-      iex> model = MachineLearning.Transformer.create_model(vocab_size: 5000)
+      iex> model = MachineLearning.Transformer.Backend.create_model(vocab_size: 5000)
       iex> is_struct(model, Axon)
       true
   """
@@ -89,7 +89,7 @@ defmodule MachineLearning.Transformer do
 
   ## Examples
 
-      iex> model = MachineLearning.Transformer.create_small_model(vocab_size: 5000)
+      iex> model = MachineLearning.Transformer.Backend.create_small_model(vocab_size: 5000)
       iex> is_struct(model, Axon)
       true
   """

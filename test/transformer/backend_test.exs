@@ -1,15 +1,15 @@
-defmodule MachineLearning.TransformerTest do
+defmodule MachineLearning.Transformer.BackendTest do
   use ExUnit.Case
-  doctest MachineLearning.Transformer
+  doctest MachineLearning.Transformer.Backend
 
-  alias MachineLearning.Transformer
+  alias MachineLearning.Transformer.Backend
   alias MachineLearning.Tokenizer
   alias MachineLearning.BytePairEncoding.Token
 
   describe "create_model/1" do
     test "creates a transformer model with specified configuration" do
       model =
-        Transformer.create_model(
+        Backend.create_model(
           vocab_size: 1000,
           max_seq_len: 128,
           embed_dim: 64,
@@ -22,15 +22,15 @@ defmodule MachineLearning.TransformerTest do
     end
 
     test "creates a small model" do
-      model = Transformer.create_small_model(vocab_size: 1000)
+      model = Backend.create_small_model(vocab_size: 1000)
       assert %Axon{} = model
     end
   end
 
   describe "init_params/2" do
     test "initializes model parameters" do
-      model = Transformer.create_small_model(vocab_size: 100)
-      params = Transformer.init_params(model, seq_len: 32)
+      model = Backend.create_small_model(vocab_size: 100)
+      params = Backend.init_params(model, seq_len: 32)
 
       assert is_map(params)
       assert map_size(params) > 0
@@ -46,7 +46,7 @@ defmodule MachineLearning.TransformerTest do
       ]
 
       train_data =
-        Transformer.prepare_training_data(
+        Backend.prepare_training_data(
           token_sequences,
           batch_size: 2,
           seq_len: 4,
@@ -155,7 +155,7 @@ defmodule MachineLearning.TransformerTest do
       ]
 
       train_data =
-        Transformer.prepare_training_data(
+        Backend.prepare_training_data(
           token_sequences,
           batch_size: 2,
           seq_len: 4,
@@ -164,7 +164,7 @@ defmodule MachineLearning.TransformerTest do
 
       # Create a tiny model
       model =
-        Transformer.create_model(
+        Backend.create_model(
           vocab_size: Tokenizer.vocab_size(tokenizer),
           max_seq_len: 32,
           embed_dim: 32,
@@ -175,11 +175,11 @@ defmodule MachineLearning.TransformerTest do
         )
 
       # Initialize params
-      params = Transformer.init_params(model, seq_len: 4)
+      params = Backend.init_params(model, seq_len: 4)
 
       # Train for 1 epoch (just to verify it works)
       trained_params =
-        Transformer.train(
+        Backend.train(
           model,
           params,
           train_data,
@@ -216,13 +216,13 @@ defmodule MachineLearning.TransformerTest do
 
         # Create a small model
         model =
-          Transformer.create_small_model(
+          Backend.create_small_model(
             vocab_size: vocab_size,
             max_seq_len: 64
           )
 
         # Initialize parameters (without training)
-        params = Transformer.init_params(model, seq_len: 32)
+        params = Backend.init_params(model, seq_len: 32)
 
         # Create a prompt
         prompt = "The future of AI"
@@ -235,7 +235,7 @@ defmodule MachineLearning.TransformerTest do
 
         # Generate text (this should work even without training)
         generated_ids =
-          Transformer.generate(
+          Backend.generate(
             model,
             params,
             prompt_tensor,
@@ -265,7 +265,7 @@ defmodule MachineLearning.TransformerTest do
 
       # Create model
       model =
-        Transformer.create_model(
+        Backend.create_model(
           vocab_size: Tokenizer.vocab_size(tokenizer),
           max_seq_len: 32,
           embed_dim: 32,
@@ -276,7 +276,7 @@ defmodule MachineLearning.TransformerTest do
         )
 
       # Initialize params
-      params = Transformer.init_params(model, seq_len: 16)
+      params = Backend.init_params(model, seq_len: 16)
 
       # Create prompt tensor
       prompt_ids = [5, 10, 15]
@@ -284,7 +284,7 @@ defmodule MachineLearning.TransformerTest do
 
       # Generate
       generated_ids =
-        Transformer.generate(
+        Backend.generate(
           model,
           params,
           prompt_tensor,
