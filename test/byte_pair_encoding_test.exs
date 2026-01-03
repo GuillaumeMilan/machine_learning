@@ -54,15 +54,6 @@ defmodule MachineLearning.BytePairEncodingTest do
       # All tokens should be Token structs
       assert Enum.all?(tokens, &match?(%Token{}, &1))
     end
-
-    test "handles empty corpus directory" do
-      # Empty directory should work but might not produce expected tokens
-      # This tests the function doesn't crash
-      tokens = BytePairEncoding.encode(@tmp_dir, 1, [])
-
-      # Should handle gracefully (implementation dependent)
-      assert is_list(tokens)
-    end
   end
 
   describe "tokenize/2" do

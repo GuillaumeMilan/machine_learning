@@ -5,10 +5,10 @@ defmodule MachineLearning.TransformerSaveLoadTest do
   alias MachineLearning.Transformer
 
   @moduletag :tmp_dir
+  @moduletag :transformer_training
   @moduletag timeout: 120_000
 
   describe "save and load model" do
-    @tag :tmp_dir
     test "saves and loads model with tokenizer and params", %{tmp_dir: tmp_dir} do
       # Ensure vocabulary file exists
       assert File.exists?("vocabulary.bert"),
@@ -93,7 +93,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       assert load_output =~ "Model loaded successfully"
     end
 
-    @tag :tmp_dir
     test "can generate text with loaded model", %{tmp_dir: tmp_dir} do
       # Train a small model
       save_dir = Path.join(tmp_dir, "test_model_generate")
@@ -140,7 +139,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       assert String.length(generated_text) > 0
     end
 
-    @tag :tmp_dir
     test "saves with custom directory name", %{tmp_dir: tmp_dir} do
       custom_save_dir = Path.join(tmp_dir, "my_custom_model")
 
@@ -165,7 +163,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       assert File.exists?(Path.join(custom_save_dir, "config.json"))
     end
 
-    @tag :tmp_dir
     test "raises error when loading from non-existent directory", %{tmp_dir: tmp_dir} do
       non_existent = Path.join(tmp_dir, "non_existent_model")
 
@@ -176,7 +173,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       end
     end
 
-    @tag :tmp_dir
     test "raises error when config.json is missing", %{tmp_dir: tmp_dir} do
       incomplete_dir = Path.join(tmp_dir, "incomplete_model")
       File.mkdir_p!(incomplete_dir)
@@ -192,7 +188,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       end
     end
 
-    @tag :tmp_dir
     test "raises error when tokenizer.bert is missing", %{tmp_dir: tmp_dir} do
       incomplete_dir = Path.join(tmp_dir, "incomplete_model_no_tokenizer")
       File.mkdir_p!(incomplete_dir)
@@ -220,7 +215,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       end
     end
 
-    @tag :tmp_dir
     test "raises error when params.bin is missing", %{tmp_dir: tmp_dir} do
       incomplete_dir = Path.join(tmp_dir, "incomplete_model_no_params")
       File.mkdir_p!(incomplete_dir)
@@ -258,7 +252,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       end
     end
 
-    @tag :tmp_dir
     test "config.json is valid JSON with expected fields", %{tmp_dir: tmp_dir} do
       save_dir = Path.join(tmp_dir, "test_config_validation")
 
@@ -309,7 +302,6 @@ defmodule MachineLearning.TransformerSaveLoadTest do
       assert {:ok, _datetime, _offset} = DateTime.from_iso8601(config_json["saved_at"])
     end
 
-    @tag :tmp_dir
     test "multiple save/load cycles preserve model functionality", %{tmp_dir: tmp_dir} do
       # First training and save
       save_dir_1 = Path.join(tmp_dir, "model_cycle_1")

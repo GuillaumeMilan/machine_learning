@@ -140,6 +140,7 @@ defmodule MachineLearning.TransformerTest do
 
   describe "integration test" do
     @tag :integration
+    @tag :transformer_training
     @tag timeout: 120_000
     test "trains a small transformer model" do
       # Create a minimal tokenizer

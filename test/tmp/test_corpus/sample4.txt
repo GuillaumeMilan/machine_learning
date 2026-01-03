@@ -1,1 +1,0 @@
-Deep neural networks can learn hierarchical representations from raw data.

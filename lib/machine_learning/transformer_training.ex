@@ -4,6 +4,7 @@ defmodule MachineLearning.TransformerTraining do
   """
   alias MachineLearning.Tokenizer
   alias MachineLearning.Transformer
+  alias MachineLearning.Transformer.Model
 
   @doc """
   Load a trained model and tokenizer from a directory.
@@ -14,17 +15,17 @@ defmodule MachineLearning.TransformerTraining do
 
   ## Returns
 
-  A tuple `{model, params, tokenizer}` containing the loaded model, trained parameters, and tokenizer.
-  The model configuration is automatically loaded from the saved `config.json` file.
+  A `MachineLearning.Transformer.Model` struct containing the loaded model, trained parameters, tokenizer,
+  configuration, and the folder path. The model configuration is automatically loaded from the saved `config.json` file.
 
   ## Examples
 
-      iex> {model, params, tokenizer} = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
+      iex> model = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
       iex> # Generate text
-      iex> prompt_ids = Tokenizer.encode(tokenizer, "The quick brown")
+      iex> prompt_ids = Tokenizer.encode(model.tokenizer, "The quick brown")
       iex> prompt_tensor = Nx.tensor([prompt_ids])
-      iex> generated_ids = Transformer.generate(model, params, prompt_tensor, max_length: 20)
-      iex> generated_text = Tokenizer.decode(tokenizer, generated_ids)
+      iex> generated_ids = Transformer.generate(model.model, model.params, prompt_tensor, max_length: 20)
+      iex> generated_text = Tokenizer.decode(model.tokenizer, generated_ids)
   """
   def load(model_dir) do
     IO.puts("Loading model from #{model_dir}...")
@@ -77,7 +78,7 @@ defmodule MachineLearning.TransformerTraining do
 
     IO.puts("Model loaded successfully from #{model_dir}\n")
 
-    {model, params, tokenizer}
+    Model.new(model, params, tokenizer, model_config, model_dir)
   end
 
   @doc """
@@ -85,22 +86,22 @@ defmodule MachineLearning.TransformerTraining do
 
   ## Parameters
 
-  - `model_tuple`: A tuple `{model, params, tokenizer}` returned by `load/1`
+  - `model_struct`: A `MachineLearning.Transformer.Model` struct returned by `load/1`
   - `prompt_text`: The text prompt to start generation from
   - `opts`: Generation options (same as `Transformer.generate/4`)
 
   ## Examples
 
-      iex> model_data = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
-      iex> MachineLearning.TransformerTraining.predict(model_data, "The quick brown")
+      iex> model = MachineLearning.TransformerTraining.load("models/transformer_1735862400")
+      iex> MachineLearning.TransformerTraining.predict(model, "The quick brown")
       "The quick brown fox jumps over..."
   """
-  def predict({model, params, tokenizer}, prompt_text, opts \\ []) do
-    prompt_ids = Tokenizer.encode(tokenizer, prompt_text)
+  def predict(%Model{} = model_struct, prompt_text, opts \\ []) do
+    prompt_ids = Tokenizer.encode(model_struct.tokenizer, prompt_text)
     prompt_tensor = Nx.tensor([prompt_ids])
 
     generated_ids =
-      Transformer.generate(model, params, prompt_tensor,
+      Transformer.generate(model_struct.model, model_struct.params, prompt_tensor,
         max_length: Keyword.get(opts, :max_length, 50),
         temperature: Keyword.get(opts, :temperature, 0.9),
         top_k: Keyword.get(opts, :top_k, 40),
@@ -109,7 +110,7 @@ defmodule MachineLearning.TransformerTraining do
         no_repeat_ngram_size: Keyword.get(opts, :no_repeat_ngram_size, 3)
       )
 
-    Tokenizer.decode(tokenizer, generated_ids)
+    Tokenizer.decode(model_struct.tokenizer, generated_ids)
   end
 
   def run(config \\ %{}) do
@@ -167,11 +168,11 @@ defmodule MachineLearning.TransformerTraining do
 
     # Step 7: Save tokenizer and trained parameters
     IO.puts("Step 7: Saving model and tokenizer...")
-    save_dir = save_model_and_tokenizer(tokenizer, trained_params, config)
+    {save_dir, model_config} = save_model_and_tokenizer(tokenizer, trained_params, config)
     IO.puts("Saved to directory: #{save_dir}\n")
 
     IO.puts("\n=== Training Complete ===")
-    {model, trained_params, tokenizer}
+    Model.new(model, trained_params, tokenizer, model_config, save_dir)
   end
 
   def run_on_model(model) do
@@ -182,23 +183,23 @@ defmodule MachineLearning.TransformerTraining do
     run_on_model(load(model_dir), config)
   end
 
-  def run_on_model({model, params, tokenizer}, config) do
-    {train_data, sample_texts, _all_texts} = prepare_training_data(tokenizer, config)
+  def run_on_model(%Model{} = model_struct, config) do
+    {train_data, sample_texts, _all_texts} = prepare_training_data(model_struct.tokenizer, config)
     epoch = Map.get(config, :epoch, 10)
     learning_rate = Map.get(config, :learning_rate, 0.001)
 
     trained_params =
-      Transformer.train(model, params, train_data,
+      Transformer.train(model_struct.model, model_struct.params, train_data,
         epochs: epoch,
         learning_rate: learning_rate
       )
 
-    generate_samples(model, trained_params, tokenizer, sample_texts)
-    save_dir = save_model_and_tokenizer(tokenizer, trained_params, config)
+    generate_samples(model_struct.model, trained_params, model_struct.tokenizer, sample_texts)
+    {save_dir, model_config} = save_model_and_tokenizer(model_struct.tokenizer, trained_params, config)
     IO.puts("Saved to directory: #{save_dir}\n")
 
     IO.puts("\n=== Training Complete ===")
-    {model, trained_params, tokenizer}
+    Model.new(model_struct.model, trained_params, model_struct.tokenizer, model_config, save_dir)
   end
 
   # Set up tokenizer from existing vocabulary or create new one
@@ -387,7 +388,7 @@ defmodule MachineLearning.TransformerTraining do
 
     IO.puts("Model and tokenizer saved successfully in: #{save_dir}")
 
-    save_dir
+    {save_dir, model_config}
   end
 
   defp log_level(:debug), do: 3
