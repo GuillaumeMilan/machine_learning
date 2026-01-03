@@ -42,9 +42,10 @@ defmodule MachineLearning.TransformerTrainingTest do
     end
 
     # TODO use tmp_dir
-    test "works with custom corpus directory" do
+    @tag :tmp_dir
+    test "works with custom corpus directory", %{tmp_dir: tmp_dir} do
       # Create temporary corpus directory with test files
-      corpus_dir = "test/tmp/test_corpus"
+      corpus_dir = Path.join(tmp_dir, "test_corpus")
       File.rm_rf!(corpus_dir)
       File.mkdir_p!(corpus_dir)
 

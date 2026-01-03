@@ -162,7 +162,7 @@ defmodule MachineLearning.TransformerTraining do
         end
 
         log_info("Loading all texts from corpus directory...", log_level)
-        MachineLearning.Corpus.load_texts(corpus_dir)
+        MachineLearning.Transformer.Corpus.load_texts(corpus_dir)
       else
         log_info("Corpus not found, using sample texts...", log_level)
 
@@ -227,9 +227,7 @@ defmodule MachineLearning.TransformerTraining do
       |> Enum.flat_map(fn {:ok, result} -> result end)
 
     log_info("Tokenized training data with #{Enum.count(token_sequences)} sequences.", log_level)
-    # Increased from 4 for more stable gradients
-    batch_size = Map.get(config, :batch_size, 16)
-    # Increased from 32 for better context
+    batch_size = Map.get(config, :batch_size, 32)
     seq_len = Map.get(config, :seq_len, 128)
 
     # Prepare batched training data
