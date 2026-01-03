@@ -21,8 +21,11 @@ defmodule MachineLearning.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:nx, "~> 0.10.0"},
-      {:exla, "~> 0.10.0"},
+      # Using local Metal-enabled versions from PR #1504
+      {:nx, path: "/Users/guillaumemilan/Documents/Projects/OpenSource/nx/nx", override: true},
+      {:exla, path: "/Users/guillaumemilan/Documents/Projects/OpenSource/nx/exla", override: true},
+      # {:nx, "~> 0.10.0"},
+      # {:exla, "~> 0.10.0"},
       {:image, "~> 0.53.0"},
       {:axon, "~> 0.8.0"},
       {:jason, "~> 1.4"}

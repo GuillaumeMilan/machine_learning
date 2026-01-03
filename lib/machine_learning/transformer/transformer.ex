@@ -366,7 +366,7 @@ defmodule MachineLearning.Transformer.Backend do
   @spec train(Axon.t(), map(), Enumerable.t(), keyword()) :: map()
   def train(model, params, train_data, opts \\ []) do
     epochs = Keyword.get(opts, :epochs, 10)
-    learning_rate = Keyword.get(opts, :learning_rate, 0.0001)
+    learning_rate = Keyword.get(opts, :learning_rate, 0.001)
     optimizer = Keyword.get(opts, :optimizer, :adamw)
     jit_compile = Keyword.get(opts, :jit_compile?, true)
 
