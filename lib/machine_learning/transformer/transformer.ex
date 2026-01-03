@@ -361,12 +361,16 @@ defmodule MachineLearning.Transformer.Backend do
     - `:epochs` - Number of training epochs (default: 10)
     - `:learning_rate` - Learning rate (default: 0.0001)
     - `:optimizer` - Optimizer to use (default: :adamw)
+    - `:jit_compile?` - Enable JIT compilation for speed (default: true)
+    - `:log_interval` - How often to log progress (default: 50 batches)
   """
   @spec train(Axon.t(), map(), Enumerable.t(), keyword()) :: map()
   def train(model, params, train_data, opts \\ []) do
     epochs = Keyword.get(opts, :epochs, 10)
     learning_rate = Keyword.get(opts, :learning_rate, 0.0001)
     optimizer = Keyword.get(opts, :optimizer, :adamw)
+    jit_compile = Keyword.get(opts, :jit_compile?, true)
+    log_interval = Keyword.get(opts, :log_interval, 50)
 
     # Preprocess training data
     processed_data =
@@ -404,11 +408,47 @@ defmodule MachineLearning.Transformer.Backend do
         _ -> Polaris.Optimizers.adamw(learning_rate: learning_rate)
       end
 
-    # Train the model
+    # Train the model with optimized settings
+    loop_opts = [
+      epochs: epochs,
+      compiler: EXLA,
+      # Log progress periodically
+      iterations: log_interval
+    ]
+
+    # Add JIT compilation options for better performance
+    loop_opts =
+      if jit_compile do
+        # JIT compilation can speed up execution significantly
+        Keyword.put(loop_opts, :jit_compile?, true)
+      else
+        loop_opts
+      end
+
+    IO.puts("\n🚀 Training Configuration:")
+    IO.puts("  - Epochs: #{epochs}")
+    IO.puts("  - Learning rate: #{learning_rate}")
+    IO.puts("  - Optimizer: #{optimizer}")
+    IO.puts("  - JIT compile: #{jit_compile}")
+    IO.puts("  - Backend: EXLA (supports GPU acceleration)")
+    IO.puts("\n💡 Tip: If you have a GPU, EXLA will automatically use it!")
+    IO.puts("   On Apple Silicon (M1/M2/M3), Metal acceleration is automatic.\n")
+
     model
     |> Axon.Loop.trainer(loss_fn, optimizer_fn)
     |> Axon.Loop.metric(fn y_true, y_pred -> token_accuracy(y_true, y_pred) end, "Accuracy")
-    |> Axon.Loop.run(processed_data, params, epochs: epochs, compiler: EXLA)
+    |> Axon.Loop.handle_event(:iteration_completed, &log_metrics/1, every: log_interval)
+    |> Axon.Loop.run(processed_data, params, loop_opts)
+  end
+
+  # Log training metrics for better visibility
+  defp log_metrics(%{metrics: metrics, iteration: iteration} = state) do
+    loss = metrics["loss"] |> Nx.to_number() |> Float.round(4)
+    accuracy = Map.get(metrics, "Accuracy", Nx.tensor(0)) |> Nx.to_number() |> Float.round(4)
+
+    IO.write("\r  Batch #{iteration}: Loss = #{loss}, Accuracy = #{accuracy * 100}%")
+
+    {:continue, state}
   end
 
   # Token-level accuracy metric
@@ -680,31 +720,43 @@ defmodule MachineLearning.Transformer.Backend do
 
   - `token_sequences`: List of token ID sequences
   - `opts`: Preparation options
-    - `:batch_size` - Batch size (default: 32)
+    - `:batch_size` - Batch size (default: 32, increase for better GPU utilization)
     - `:seq_len` - Sequence length (default: 128)
     - `:shuffle` - Whether to shuffle data (default: true)
+    - `:max_concurrency` - Max parallel tasks for sequence creation (default: System.schedulers_online())
+
+  ## Performance Tips
+
+  - **Larger batch_size** (64, 128, 256) = faster training with GPU, but needs more memory
+  - **Parallel processing** already enabled via Task.async_stream
+  - Monitor memory usage and adjust batch_size accordingly
   """
   @spec prepare_training_data(list(list(integer())), keyword()) :: Enumerable.t()
   def prepare_training_data(token_sequences, opts \\ []) do
     batch_size = Keyword.get(opts, :batch_size, 32)
     seq_len = Keyword.get(opts, :seq_len, 128)
     shuffle = Keyword.get(opts, :shuffle, true)
+    max_concurrency = Keyword.get(opts, :max_concurrency, System.schedulers_online())
+
+    IO.puts("\n📊 Data Preparation Settings:")
+    IO.puts("  - Batch size: #{batch_size} (increase for faster GPU training)")
+    IO.puts("  - Sequence length: #{seq_len}")
+    IO.puts("  - Parallel workers: #{max_concurrency} CPU cores")
+    IO.puts("  - Shuffle: #{shuffle}\n")
 
     # Create overlapping sequences of length seq_len + 1
     # (seq_len for input, +1 for target)
+    # Using Task.async_stream for parallel processing across CPU cores
     sequences =
       token_sequences
       |> Task.async_stream(
         fn tokens ->
-          start = System.monotonic_time(:millisecond)
-
           create_sequences(tokens, seq_len + 1)
-          |> tap(fn _ ->
-            duration = System.monotonic_time(:millisecond) - start
-            IO.puts("Created sequences from tokens of length #{length(tokens)} in #{duration} ms")
-          end)
         end,
-        timeout: :infinity
+        timeout: :infinity,
+        max_concurrency: max_concurrency,
+        # Don't preserve order for speed (we shuffle anyway)
+        ordered: false
       )
       |> Enum.flat_map(fn {:ok, result} -> result end)
 

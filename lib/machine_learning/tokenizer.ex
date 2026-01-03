@@ -4,6 +4,15 @@ defmodule MachineLearning.Tokenizer do
 
   This module bridges the gap between the BytePairEncoding module and the
   Transformer model by managing the vocabulary and token ID mappings.
+
+  ## Special Tokens
+
+  The tokenizer uses four special tokens (when `add_special_tokens: true`):
+
+  - `<PAD>` (ID: 0) - Padding token used to fill sequences to a uniform length when batching
+  - `<UNK>` (ID: 1) - Unknown token used for out-of-vocabulary words that don't exist in the trained vocabulary
+  - `<BOS>` (ID: 2) - Beginning of sequence token added at the start of text sequences
+  - `<EOS>` (ID: 3) - End of sequence token added at the end of text sequences
   """
 
   alias MachineLearning.BytePairEncoding
@@ -353,9 +362,17 @@ defmodule MachineLearning.Tokenizer do
   end
 
   # Special token IDs (when add_special_tokens is true)
+
+  # Padding token - fills sequences to uniform length for batching
   defp pad_id, do: 0
+
+  # Unknown token - represents out-of-vocabulary words
   defp unk_id, do: 1
+
+  # Beginning of sequence token - marks the start of text
   defp bos_id, do: 2
+
+  # End of sequence token - marks the end of text
   defp eos_id, do: 3
 
   defp is_special_token?(token) do
