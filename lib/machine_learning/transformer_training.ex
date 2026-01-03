@@ -111,7 +111,7 @@ defmodule MachineLearning.TransformerTraining do
   def run_on_model(%Model{} = model_struct, config) do
     {train_data, sample_texts, _all_texts} = prepare_training_data(model_struct.tokenizer, config)
     epoch = Map.get(config, :epoch, 10)
-    learning_rate = Map.get(config, :learning_rate, 0.001)
+    learning_rate = Map.get(config, :learning_rate, 0.01)
 
     trained_params =
       Backend.train(model_struct.model, model_struct.params, train_data,

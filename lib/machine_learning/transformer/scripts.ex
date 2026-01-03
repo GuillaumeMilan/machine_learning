@@ -6,9 +6,9 @@ defmodule MachineLearning.Transformer.Scripts do
     |> Enum.reduce(original_model, fn iteration, acc_model ->
       model =
         MachineLearning.TransformerTraining.run_on_model(acc_model, %{
-          epoch: 5,
+          epoch: 3,
           corpus_dir: corpus_path,
-          sample_size: 10,
+          sample_size: 50,
           log_level: :debug
         })
 
