@@ -23,7 +23,8 @@ defmodule MachineLearning.MixProject do
     [
       # Using local Metal-enabled versions from PR #1504
       {:nx, path: "/Users/guillaumemilan/Documents/Projects/OpenSource/nx/nx", override: true},
-      {:exla, path: "/Users/guillaumemilan/Documents/Projects/OpenSource/nx/exla", override: true},
+      {:exla,
+       path: "/Users/guillaumemilan/Documents/Projects/OpenSource/nx/exla", override: true},
       # {:nx, "~> 0.10.0"},
       # {:exla, "~> 0.10.0"},
       {:image, "~> 0.53.0"},

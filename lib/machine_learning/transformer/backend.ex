@@ -338,7 +338,7 @@ defmodule MachineLearning.Transformer.Backend do
     input_template = Nx.template({1, seq_len}, :s64)
     position_template = Nx.template({1, seq_len}, :s64)
 
-    {init_fn, _predict_fn} = Axon.build(model)
+    {init_fn, _predict_fn} = Axon.build(model, compiler: EXLA)
 
     init_fn.(
       %{
@@ -366,9 +366,10 @@ defmodule MachineLearning.Transformer.Backend do
   @spec train(Axon.t(), map(), Enumerable.t(), keyword()) :: map()
   def train(model, params, train_data, opts \\ []) do
     epochs = Keyword.get(opts, :epochs, 10)
-    learning_rate = Keyword.get(opts, :learning_rate, 0.001)
+    learning_rate = Keyword.get(opts, :learning_rate, 0.0003)
     optimizer = Keyword.get(opts, :optimizer, :adamw)
     jit_compile = Keyword.get(opts, :jit_compile?, true)
+    debug_tokens = Keyword.get(opts, :debug_tokens, false)
 
     # Preprocess training data
     processed_data =
@@ -378,23 +379,34 @@ defmodule MachineLearning.Transformer.Backend do
       end)
 
     # Cross-entropy loss for language modeling
-    loss_fn = fn y_true, y_pred ->
+    loss_fn = fn {y_true, attention_mask}, y_pred ->
       # y_pred shape: {batch, seq_len, vocab_size}
       # y_true shape: {batch, seq_len} (token IDs)
+      # attention_mask shape: {batch, seq_len} (1 for real tokens, 0 for padding)
 
       # Reshape for loss computation
       {batch_size, seq_len, vocab_size} = Nx.shape(y_pred)
       y_pred_flat = Nx.reshape(y_pred, {batch_size * seq_len, vocab_size})
       y_true_flat = Nx.reshape(y_true, {batch_size * seq_len})
+      mask_flat = Nx.reshape(attention_mask, {batch_size * seq_len})
 
       # Sparse categorical cross-entropy
-      Axon.Losses.categorical_cross_entropy(
-        Nx.new_axis(y_true_flat, -1),
-        y_pred_flat,
-        reduction: :mean,
-        from_logits: true,
-        sparse: true
-      )
+      loss =
+        Axon.Losses.categorical_cross_entropy(
+          Nx.new_axis(y_true_flat, -1),
+          y_pred_flat,
+          reduction: :none,
+          from_logits: true,
+          sparse: true
+        )
+
+      # Mask out padding tokens and compute mean over valid tokens only
+      mask_float = Nx.as_type(mask_flat, :f32)
+      masked_loss = Nx.multiply(loss, mask_float)
+
+      # Prevent division by zero
+      num_valid_tokens = Nx.max(Nx.sum(mask_float), 1.0)
+      Nx.divide(Nx.sum(masked_loss), num_valid_tokens)
     end
 
     # Create optimizer
@@ -426,34 +438,117 @@ defmodule MachineLearning.Transformer.Backend do
     IO.puts("  - Learning rate: #{learning_rate}")
     IO.puts("  - Optimizer: #{optimizer}")
     IO.puts("  - JIT compile: #{jit_compile}")
+    IO.puts("  - Debug tokens: #{debug_tokens}")
 
     model
     |> Axon.Loop.trainer(loss_fn, optimizer_fn)
     |> Axon.Loop.metric(fn y_true, y_pred -> token_accuracy(y_true, y_pred) end, "Accuracy")
-    #|> Axon.Loop.handle_event(:iteration_completed, &log_metrics/1, every: log_interval)
+    |> then(fn loop ->
+      if debug_tokens do
+        Axon.Loop.handle_event(loop, :iteration_completed, &log_token_predictions/1, every: 10)
+      else
+        loop
+      end
+    end)
     |> Axon.Loop.run(processed_data, params, loop_opts)
   end
 
-  # Log training metrics for better visibility
-  # defp log_metrics(%{metrics: metrics, iteration: iteration, epoch: epoch} = state) do
-  #   loss = metrics["loss"] |> Nx.to_number() |> Float.round(4)
-  #   accuracy = Map.get(metrics, "Accuracy", Nx.tensor(0)) |> Nx.to_number() |> Float.round(4)
+  # Log token predictions for debugging (called outside of JIT-compiled code)
+  defp log_token_predictions(
+         %{step_state: %{y_true: {y_true, attention_mask}}} = state
+       ) do
+    # Get predictions by running forward pass
+    y_pred = state.step_state[:y_pred] || state.step_state[2]
 
-  #   #IO.puts("Epoch #{epoch}, Batch #{iteration}: Loss = #{loss}, Accuracy = #{accuracy}")
+    if y_pred do
+      {batch_size, seq_len, vocab_size} = Nx.shape(y_pred)
+      y_pred_flat = Nx.reshape(y_pred, {batch_size * seq_len, vocab_size})
+      y_true_flat = Nx.reshape(y_true, {batch_size * seq_len})
+      mask_flat = Nx.reshape(attention_mask, {batch_size * seq_len})
 
-  #   {:continue, state}
-  # end
+      # Show target tokens
+      valid_target_tokens =
+        y_true_flat
+        |> Nx.to_flat_list()
+        |> Enum.zip(Nx.to_flat_list(mask_flat))
+        |> Enum.filter(fn {_token, mask} -> mask == 1 end)
+        |> Enum.map(fn {token, _mask} -> token end)
+        |> Enum.take(50)
+
+      # Get predictions and show which ones were correct
+      predictions_flat = Nx.argmax(y_pred_flat, axis: -1)
+
+      correct_predictions =
+        Enum.zip([
+          Nx.to_flat_list(y_true_flat),
+          Nx.to_flat_list(predictions_flat),
+          Nx.to_flat_list(mask_flat)
+        ])
+        |> Enum.filter(fn {_true, _pred, mask} -> mask == 1 end)
+        |> Enum.take(50)
+        |> Enum.map(fn {true_token, pred_token, _mask} ->
+          if true_token == pred_token do
+            "✓#{true_token}"
+          else
+            "✗#{true_token}→#{pred_token}"
+          end
+        end)
+
+      # Analyze prediction distribution
+      pred_distribution =
+        predictions_flat
+        |> Nx.to_flat_list()
+        |> Enum.zip(Nx.to_flat_list(mask_flat))
+        |> Enum.filter(fn {_token, mask} -> mask == 1 end)
+        |> Enum.map(fn {token, _mask} -> token end)
+        |> Enum.frequencies()
+        |> Enum.sort_by(fn {_token, count} -> -count end)
+        |> Enum.take(10)
+
+      # Count unique predictions
+      unique_predictions =
+        predictions_flat
+        |> Nx.to_flat_list()
+        |> Enum.zip(Nx.to_flat_list(mask_flat))
+        |> Enum.filter(fn {_token, mask} -> mask == 1 end)
+        |> Enum.map(fn {token, _mask} -> token end)
+        |> Enum.uniq()
+        |> length()
+
+      IO.puts("\n--- Token Debug (Iteration #{state.iteration}) ---")
+      IO.inspect(valid_target_tokens, label: "Target tokens", limit: :infinity)
+      IO.inspect(correct_predictions, label: "Predictions (✓=correct, ✗=wrong)", limit: :infinity)
+      IO.puts("\n📊 Prediction Stats:")
+      IO.puts("  Unique tokens predicted: #{unique_predictions} out of #{vocab_size}")
+      IO.puts("  Top 10 most predicted tokens:")
+
+      Enum.each(pred_distribution, fn {token, count} ->
+        IO.puts("    Token #{token}: #{count} times")
+      end)
+    end
+
+    {:continue, state}
+  end
 
   # Token-level accuracy metric
-  defp token_accuracy(y_true, y_pred) do
+  defp token_accuracy({y_true, attention_mask}, y_pred) do
     # y_pred shape: {batch, seq_len, vocab_size}
     # y_true shape: {batch, seq_len}
+    # attention_mask shape: {batch, seq_len}
     predictions = Nx.argmax(y_pred, axis: -1)
-    Nx.mean(Nx.equal(predictions, y_true))
+    correct = Nx.equal(predictions, y_true)
+
+    # Mask out padding tokens
+    mask_float = Nx.as_type(attention_mask, :f32)
+    masked_correct = Nx.multiply(Nx.as_type(correct, :f32), mask_float)
+
+    # Compute accuracy only over valid tokens
+    num_valid_tokens = Nx.max(Nx.sum(mask_float), 1.0)
+    Nx.divide(Nx.sum(masked_correct), num_valid_tokens)
   end
 
   # Prepare batch for training
-  defp prepare_batch(%{input_ids: input_ids, labels: labels}) do
+  defp prepare_batch(%{input_ids: input_ids, labels: labels, attention_mask: attention_mask}) do
     {batch_size, seq_len} = Nx.shape(input_ids)
 
     # Create position IDs (0, 1, 2, ..., seq_len-1)
@@ -466,7 +561,7 @@ defmodule MachineLearning.Transformer.Backend do
       "position_ids" => position_ids
     }
 
-    {input, labels}
+    {input, {labels, attention_mask}}
   end
 
   @doc """
@@ -771,7 +866,6 @@ defmodule MachineLearning.Transformer.Backend do
     IO.puts("\n📊 Data Preparation Settings:")
     IO.puts("  - Batch size: #{batch_size} (increase for faster GPU training)")
     IO.puts("  - Sequence length: #{seq_len}")
-    IO.puts("  - Parallel workers: #{max_concurrency} CPU cores")
     IO.puts("  - Shuffle: #{shuffle}\n")
 
     # Create overlapping sequences of length seq_len + 1
@@ -816,7 +910,13 @@ defmodule MachineLearning.Transformer.Backend do
         |> Enum.map(fn seq -> Enum.slice(seq, 1, seq_len) end)
         |> Nx.tensor()
 
-      %{input_ids: input_ids, labels: labels}
+      # Create attention mask: 1 for real tokens, 0 for padding (token_id == 0)
+      attention_mask =
+        input_ids
+        |> Nx.not_equal(0)
+        |> Nx.as_type(:u8)
+
+      %{input_ids: input_ids, labels: labels, attention_mask: attention_mask}
     end)
   end
 

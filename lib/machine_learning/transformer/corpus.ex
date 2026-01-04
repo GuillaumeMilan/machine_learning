@@ -10,7 +10,6 @@ defmodule MachineLearning.Transformer.Corpus do
 
   require Logger
 
-
   alias MachineLearning.Transformer.Model
   alias MachineLearning.Tokenizer
 
@@ -303,6 +302,7 @@ defmodule MachineLearning.Transformer.Corpus do
       |> Task.async_stream(
         fn filename ->
           content = File.read!(filename)
+
           %{
             char_count: String.length(content),
             content_hash: :crypto.hash(:md5, content) |> Base.encode16()

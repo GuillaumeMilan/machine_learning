@@ -6,15 +6,15 @@ defmodule MachineLearning.Transformer.Scripts do
     |> Enum.reduce(original_model, fn iteration, acc_model ->
       model =
         MachineLearning.TransformerTraining.run_on_model(acc_model, %{
-          epoch: 3,
+          epoch: 1,
           corpus_dir: corpus_path,
-          sample_size: 50,
+          sample_size: 10000,
           log_level: :debug
         })
 
       IO.puts("Completed training iteration #{iteration}")
 
-      evaluate_model(model)
+      # spawn(fn -> evaluate_model(model) end)
       model
     end)
   end
@@ -34,10 +34,13 @@ defmodule MachineLearning.Transformer.Scripts do
       |> String.trim()
       |> then(&(&1 <> " "))
 
-    1..5
+    result = 1..5
     |> Enum.reduce(original_input, fn _, input ->
       MachineLearning.TransformerTraining.predict(model, input)
     end)
-    |> IO.puts()
+
+    file = System.tmp_dir!() <> "/model_evaluation_#{:os.system_time(:millisecond)}.txt"
+    File.write!(file, result)
+    IO.puts("Model evaluation completed. Output written to #{file} for model: #{model.folder}")
   end
 end
