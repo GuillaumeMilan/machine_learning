@@ -66,11 +66,23 @@ defmodule MachineLearning.Transformer.Corpus do
     |> Stream.filter(fn filename -> Path.extname(filename) in accepted_extensions end)
     |> Task.async_stream(
       fn filename ->
-        content = filename_header(filename) <> File.read!(filename)
-        corpus_name = :crypto.hash(:sha256, content) |> Base.encode16() |> String.downcase()
-        corpus_file_path = Path.join(corpus_directory, corpus_file_path(corpus_name))
-        File.mkdir_p!(Path.dirname(corpus_file_path))
-        File.write!(corpus_file_path, content)
+        file_content = File.read!(filename)
+
+        reject? =
+          file_content
+          |> String.split("\n")
+          |> Enum.any?(fn line -> String.length(String.trim(line)) >= 1000 end)
+
+        if reject? do
+          Logger.warning("Skipping file with very long lines: #{filename}")
+          :skip
+        else
+          content = filename_header(filename) <> File.read!(filename)
+          corpus_name = :crypto.hash(:sha256, content) |> Base.encode16() |> String.downcase()
+          corpus_file_path = Path.join(corpus_directory, corpus_file_path(corpus_name))
+          File.mkdir_p!(Path.dirname(corpus_file_path))
+          File.write!(corpus_file_path, content)
+        end
       end,
       max_concurrency: @max_concurrency,
       timeout: :infinity
@@ -548,6 +560,7 @@ defmodule MachineLearning.Transformer.Corpus do
     File.ls!(directory)
     |> Enum.reject(&String.starts_with?(&1, "."))
     |> Enum.reject(&String.ends_with?(&1, "_modules"))
+    |> Enum.reject(&String.ends_with?(&1, "bench"))
     |> Stream.flat_map(fn name ->
       full_name = Path.join(directory, name)
 

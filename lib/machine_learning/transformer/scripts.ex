@@ -1,4 +1,5 @@
 defmodule MachineLearning.Transformer.Scripts do
+  # MachineLearning.Transformer.train("models/small", "dataset_elixir", epochs: 10, params_version: "latest")
   def train_few_steps_models(original_model, corpus_path, iteration_count) do
     # Placeholder for training few models script
 
@@ -34,10 +35,11 @@ defmodule MachineLearning.Transformer.Scripts do
       |> String.trim()
       |> then(&(&1 <> " "))
 
-    result = 1..5
-    |> Enum.reduce(original_input, fn _, input ->
-      MachineLearning.TransformerTraining.predict(model, input)
-    end)
+    result =
+      1..5
+      |> Enum.reduce(original_input, fn _, input ->
+        MachineLearning.TransformerTraining.predict(model, input)
+      end)
 
     file = System.tmp_dir!() <> "/model_evaluation_#{:os.system_time(:millisecond)}.txt"
     File.write!(file, result)

@@ -454,9 +454,7 @@ defmodule MachineLearning.Transformer.Backend do
   end
 
   # Log token predictions for debugging (called outside of JIT-compiled code)
-  defp log_token_predictions(
-         %{step_state: %{y_true: {y_true, attention_mask}}} = state
-       ) do
+  defp log_token_predictions(%{step_state: %{y_true: {y_true, attention_mask}}} = state) do
     # Get predictions by running forward pass
     y_pred = state.step_state[:y_pred] || state.step_state[2]
 
@@ -867,6 +865,7 @@ defmodule MachineLearning.Transformer.Backend do
     IO.puts("  - Batch size: #{batch_size} (increase for faster GPU training)")
     IO.puts("  - Sequence length: #{seq_len}")
     IO.puts("  - Shuffle: #{shuffle}\n")
+    start = System.monotonic_time(:millisecond)
 
     # Create overlapping sequences of length seq_len + 1
     # (seq_len for input, +1 for target)
@@ -886,14 +885,22 @@ defmodule MachineLearning.Transformer.Backend do
 
     sequences =
       if shuffle do
+        start = System.monotonic_time(:millisecond)
+
         Enum.shuffle(sequences)
+        |> tap(fn _ ->
+          duration = System.monotonic_time(:millisecond) - start
+          IO.puts("Shuffling completed in #{duration} ms.")
+        end)
       else
         sequences
       end
 
     IO.puts(
-      "Total sequences created: #{length(sequences)}, will now create #{div(length(sequences), batch_size)} batches."
+      "Total sequences created: #{length(sequences)} in #{System.monotonic_time(:millisecond) - start} ms, will now create #{div(length(sequences), batch_size)} batches."
     )
+
+    start = System.monotonic_time(:millisecond)
 
     # Batch sequences
     sequences
@@ -917,6 +924,10 @@ defmodule MachineLearning.Transformer.Backend do
         |> Nx.as_type(:u8)
 
       %{input_ids: input_ids, labels: labels, attention_mask: attention_mask}
+    end)
+    |> tap(fn _ ->
+      duration = System.monotonic_time(:millisecond) - start
+      IO.puts("Batching completed in #{duration} ms.")
     end)
   end
 
