@@ -73,7 +73,9 @@ defmodule MachineLearning.BytePairEncoding do
       |> calculate_frequency()
 
     vocabulary_size = MapSet.size(elements)
-    highest_freq = frequencies |> Enum.at(0) |> elem(1)
+    highest_freq = frequencies |> Enum.at(0) |> elem(1) |> Map.get(:freq)
+    highest_freq_tokens = frequencies |> Enum.at(0) |> elem(1) |> Map.get(:tokens)
+    highest_freq_token = frequencies |> Enum.at(0) |> elem(0)
     stop? = vocabulary_size >= expected_vocabulary_size or highest_freq < 2
 
     Logger.info(
@@ -96,8 +98,14 @@ defmodule MachineLearning.BytePairEncoding do
     else
       new_tokens =
         frequencies
-        |> Enum.take_while(fn {_token, freq} -> freq == highest_freq end)
+        |> tl()
+        |> Enum.take_while(fn {_token, %{freq: freq, tokens: tokens}} ->
+          freq > highest_freq / 2 and
+            MapSet.disjoint?(MapSet.new(tokens), MapSet.new(highest_freq_tokens))
+        end)
         |> Enum.map(fn {token, _freq} -> token end)
+
+      new_tokens = [highest_freq_token | new_tokens]
 
       Logger.info("New tokens to add: #{inspect(new_tokens)}")
 
@@ -269,9 +277,9 @@ defmodule MachineLearning.BytePairEncoding do
     end)
     |> then(fn {freq_map, elements} ->
       {Map.new(freq_map, fn {{a, b}, freq} ->
-         {Token.new(a, b), freq}
+         {Token.new(a, b), %{freq: freq, tokens: [a, b]}}
        end)
-       |> Enum.sort_by(fn {_token, freq} -> -freq end), elements}
+       |> Enum.sort_by(fn {_token, %{freq: freq}} -> -freq end), elements}
     end)
     |> tap(fn _ ->
       Logger.info("Frequencies calculated in #{System.monotonic_time(:millisecond) - start} ms.")
