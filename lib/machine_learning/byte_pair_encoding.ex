@@ -25,7 +25,11 @@ defmodule MachineLearning.BytePairEncoding do
     ".toml"
   ]
 
-  @max_concurrency 50
+  @max_concurrency 5
+
+  def save(tokens, filename) do
+    File.write!(filename, :erlang.term_to_binary(tokens))
+  end
 
   @spec add_to_corpus(Path.t(), Path.t()) :: :ok
   def add_to_corpus(source_directory, corpus_directory, opts \\ %{}) do
@@ -62,8 +66,11 @@ defmodule MachineLearning.BytePairEncoding do
 
   def compress(corpus_directory, expected_vocabulary_size, tokens \\ []) do
     create_cache()
+    |> tap(fn _ -> Logger.info("Created new cache for compression...") end)
     |> insert_filenames_to_cache(corpus_directory)
+    |> tap(fn _ -> Logger.info("Inserted filenames to cache...") end)
     |> populate_cache_with_tokenized_files(tokens)
+    |> tap(fn _ -> Logger.info("Populated cache with tokenized files...") end)
     |> do_compress(expected_vocabulary_size, tokens)
   end
 
@@ -108,6 +115,8 @@ defmodule MachineLearning.BytePairEncoding do
       new_tokens = [highest_freq_token | new_tokens]
 
       Logger.info("New tokens to add: #{inspect(new_tokens)}")
+      File.write!("/tmp/bpe_save.bert", :erlang.term_to_binary(new_tokens ++ tokens))
+      Logger.info("Tokens saved to /tmp/bpe_save.bert")
 
       retokenize_cache(cache, new_tokens)
       do_compress(cache, expected_vocabulary_size, new_tokens ++ tokens)

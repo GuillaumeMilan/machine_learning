@@ -5,6 +5,7 @@ defmodule MachineLearning.Transformer do
   This module provides a high-level interface for the complete transformer model lifecycle:
   - Creating new models with initial parameters
   - Adding and managing training datasets
+  - Adding and managing testing datasets
   - Training with automatic checkpoint saving
   - Loading models for inference or continued training
   - Generating text predictions
@@ -21,11 +22,18 @@ defmodule MachineLearning.Transformer do
       │   ├── epoch_001.bin        # After epoch 1
       │   ├── epoch_002.bin        # After epoch 2
       │   └── latest.bin           # Most recent parameters
-      └── training_data/           # Prepared training datasets
-          ├── dataset_v1/
+      ├── training_data/           # Prepared training datasets
+      │   ├── dataset_v1/
+      │   │   ├── metadata.json    # Dataset configuration
+      │   │   └── batches.bin      # Serialized training batches
+      │   └── dataset_v2/
+      │       ├── metadata.json
+      │       └── batches.bin
+      └── testing_data/            # Prepared testing datasets
+          ├── test_v1/
           │   ├── metadata.json    # Dataset configuration
-          │   └── batches.bin      # Serialized training batches
-          └── dataset_v2/
+          │   └── batches.bin      # Serialized testing batches
+          └── test_v2/
               ├── metadata.json
               └── batches.bin
 
@@ -59,7 +67,22 @@ defmodule MachineLearning.Transformer do
         learning_rate: 0.001
       )
 
-      # 4. Generate text
+      # 4. Add testing data
+      MachineLearning.Transformer.add_testing_data(
+        "models/my_model",
+        "test_v1",
+        corpus_dir: "./tmp/test_corpus",
+        batch_size: 32,
+        seq_len: 128
+      )
+
+      # 5. Test the model
+      MachineLearning.Transformer.test(
+        "models/my_model",
+        "test_v1"
+      )
+
+      # 6. Generate text
       text = MachineLearning.Transformer.predict(
         "models/my_model",
         "The quick brown",
@@ -327,6 +350,158 @@ defmodule MachineLearning.Transformer do
   end
 
   @doc """
+  Adds testing data to a model's testing_data folder.
+
+  Follows the same pattern as add_training_data but stores data in a
+  separate testing_data directory.
+
+  ## Parameters
+
+  - `model_or_path`: Either a Model struct or path to model directory
+  - `dataset_name`: Name/identifier for this dataset
+  - `opts`: Options
+    - `:corpus_dir` - Load texts from corpus directory
+    - `:token_sequences` - Pre-tokenized sequences (alternative to corpus_dir)
+    - `:batch_size` - Batch size for testing (default: 32)
+    - `:seq_len` - Sequence length (default: 128)
+    - `:sample_size` - Limit number of texts from corpus (optional)
+    - `:shuffle` - Whether to shuffle data (default: false)
+
+  ## Examples
+
+      # From corpus directory
+      MachineLearning.Transformer.add_testing_data(
+        "models/small",
+        "test_elixir",
+        corpus_dir: "/tmp/elixir_test_corpus",
+        batch_size: 32,
+        seq_len: 128
+      )
+
+      # From pre-tokenized sequences
+      MachineLearning.Transformer.add_testing_data(
+        model,
+        "test_dataset_v1",
+        token_sequences: [[1, 2, 3], [4, 5, 6]],
+        batch_size: 16,
+        seq_len: 64
+      )
+  """
+  @spec add_testing_data(Model.t() | Path.t(), String.t(), keyword()) :: :ok
+  def add_testing_data(model_or_path, dataset_name, opts) do
+    # Load model if path provided
+    {model_dir, tokenizer} =
+      case model_or_path do
+        %Model{folder: folder, tokenizer: tok} ->
+          {folder, tok}
+
+        path when is_binary(path) ->
+          model = load(path)
+          {model.folder, model.tokenizer}
+      end
+
+    IO.puts("\nAdding testing data '#{dataset_name}' to model at: #{model_dir}")
+
+    # Extract options
+    batch_size = Keyword.get(opts, :batch_size, 32)
+    seq_len = Keyword.get(opts, :seq_len, 128)
+    shuffle = Keyword.get(opts, :shuffle, false)
+
+    # Get token sequences
+    token_sequences =
+      if corpus_dir = Keyword.get(opts, :corpus_dir) do
+        IO.puts("Loading texts from corpus: #{corpus_dir}")
+
+        unless File.dir?(corpus_dir) do
+          raise "Corpus directory not found: #{corpus_dir}"
+        end
+
+        # Load texts from corpus
+        sample_size = Keyword.get(opts, :sample_size)
+
+        texts =
+          if sample_size do
+            Corpus.load_texts(corpus_dir, max_files: sample_size)
+          else
+            Corpus.load_texts(corpus_dir)
+          end
+
+        IO.puts("Loaded #{length(texts)} texts from corpus")
+
+        # Tokenize texts
+        IO.puts("Tokenizing texts...")
+
+        texts
+        |> Enum.map(fn text ->
+          Tokenizer.encode(tokenizer, text, add_special_tokens: true)
+        end)
+      else
+        # Use provided token sequences
+        Keyword.fetch!(opts, :token_sequences)
+      end
+
+    IO.puts("Processing #{length(token_sequences)} token sequences...")
+
+    # Prepare batched testing data
+    test_data =
+      Backend.prepare_training_data(
+        token_sequences,
+        batch_size: batch_size,
+        seq_len: seq_len,
+        shuffle: shuffle
+      )
+
+    # Materialize the stream into a list
+    IO.puts("Materializing batches...")
+    batches = Enum.to_list(test_data)
+    num_batches = length(batches)
+    IO.puts("Created #{num_batches} batches")
+
+    # Create dataset directory
+    dataset_dir = Path.join([model_dir, "testing_data", dataset_name])
+    File.mkdir_p!(dataset_dir)
+
+    # Save metadata
+    metadata = %{
+      "batch_size" => batch_size,
+      "seq_len" => seq_len,
+      "num_batches" => num_batches,
+      "num_sequences" => length(token_sequences),
+      "shuffle" => shuffle,
+      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    metadata_path = Path.join(dataset_dir, "metadata.json")
+    File.write!(metadata_path, Jason.encode!(metadata, pretty: true))
+    IO.puts("✓ Saved metadata")
+
+    # Serialize and save batches
+    IO.puts("Serializing batches...")
+    batches_path = Path.join(dataset_dir, "batches.bin")
+
+    # Convert batches to a serializable format
+    serialized_batches =
+      Enum.map(batches, fn batch ->
+        %{
+          "input_ids" => Nx.serialize(batch.input_ids),
+          "labels" => Nx.serialize(batch.labels),
+          "attention_mask" => Nx.serialize(batch.attention_mask)
+        }
+      end)
+
+    File.write!(batches_path, :erlang.term_to_binary(serialized_batches))
+    IO.puts("✓ Saved batches")
+
+    IO.puts("\n✅ Testing data '#{dataset_name}' added successfully")
+    IO.puts("   Location: #{dataset_dir}")
+    IO.puts("   Batches: #{num_batches}")
+    IO.puts("   Batch size: #{batch_size}")
+    IO.puts("   Sequence length: #{seq_len}")
+
+    :ok
+  end
+
+  @doc """
   Loads training data from a model's training_data folder.
 
   ## Parameters
@@ -383,6 +558,62 @@ defmodule MachineLearning.Transformer do
   end
 
   @doc """
+  Loads testing data from a model's testing_data folder.
+
+  ## Parameters
+
+  - `model_or_path`: Either a Model struct or path to model directory
+  - `dataset_name`: Name of the dataset to load
+
+  ## Returns
+
+  A tuple of `{test_data_stream, metadata}` where test_data_stream is an
+  enumerable of batches and metadata contains dataset configuration.
+
+  ## Examples
+
+      {test_data, metadata} = MachineLearning.Transformer.load_testing_data(
+        "models/my_model",
+        "test_v1"
+      )
+  """
+  @spec load_testing_data(Model.t() | Path.t(), String.t()) :: {Enumerable.t(), map()}
+  def load_testing_data(model_or_path, dataset_name) do
+    # Get model directory
+    model_dir =
+      case model_or_path do
+        %Model{folder: folder} -> folder
+        path when is_binary(path) -> path
+      end
+
+    dataset_dir = Path.join([model_dir, "testing_data", dataset_name])
+
+    unless File.dir?(dataset_dir) do
+      raise "Testing data '#{dataset_name}' not found at: #{dataset_dir}"
+    end
+
+    # Load metadata
+    metadata_path = Path.join(dataset_dir, "metadata.json")
+    metadata = File.read!(metadata_path) |> Jason.decode!()
+
+    # Load batches
+    batches_path = Path.join(dataset_dir, "batches.bin")
+    serialized_batches = File.read!(batches_path) |> :erlang.binary_to_term()
+
+    # Deserialize batches lazily
+    test_data =
+      Stream.map(serialized_batches, fn batch ->
+        %{
+          input_ids: Nx.deserialize(batch["input_ids"]),
+          labels: Nx.deserialize(batch["labels"]),
+          attention_mask: Nx.deserialize(batch["attention_mask"])
+        }
+      end)
+
+    {test_data, metadata}
+  end
+
+  @doc """
   Trains a transformer model on a specific dataset.
 
   Automatically saves parameters after each epoch to params/epoch_XXX.bin
@@ -434,6 +665,7 @@ defmodule MachineLearning.Transformer do
     epochs = Keyword.get(opts, :epochs, 10)
     learning_rate = Keyword.get(opts, :learning_rate, 0.001)
     save_every_epoch = Keyword.get(opts, :save_every_epoch, true)
+    shuffle_every_epoch = Keyword.get(opts, :shuffle_every_epoch, false)
     optimizer = Keyword.get(opts, :optimizer, :adamw)
 
     IO.puts("\n🚀 Starting training")
@@ -441,6 +673,7 @@ defmodule MachineLearning.Transformer do
     IO.puts("   Dataset: #{dataset_name}")
     IO.puts("   Epochs: #{epochs}")
     IO.puts("   Learning rate: #{learning_rate}")
+    IO.puts("   Shuffle every epoch: #{shuffle_every_epoch}")
 
     # Load training data
     {train_data, metadata} = load_training_data(model, dataset_name)
@@ -448,21 +681,55 @@ defmodule MachineLearning.Transformer do
     IO.puts("   Batch size: #{metadata["batch_size"]}")
     IO.puts("   Sequence length: #{metadata["seq_len"]}\n")
 
+    # Get raw batches for reshuffling if needed
+    raw_batches =
+      if shuffle_every_epoch do
+        IO.puts("Pre-loading batches for per-epoch shuffling...")
+        Enum.to_list(train_data)
+      else
+        nil
+      end
+
+    # Initialize or load metrics history (creates header if needed)
+    _metrics_history = load_or_initialize_metrics_history(model.folder)
+    start_epoch = get_last_completed_epoch(model.folder) + 1
+
+    IO.puts("Resuming from epoch #{start_epoch}...\n")
+
     # Train epoch by epoch to save checkpoints
     final_params =
-      Enum.reduce(1..epochs, model.params, fn epoch, current_params ->
-        IO.puts("\n📊 Epoch #{epoch}/#{epochs}")
+      Enum.reduce(start_epoch..(start_epoch + epochs - 1), model.params, fn epoch,
+                                                                            current_params ->
+        IO.puts("\n📊 Epoch #{epoch}/#{start_epoch + epochs - 1}")
 
-        # Train for one epoch
-        updated_params =
+        # Reshuffle batches if enabled using Nx operations for optimization
+        epoch_train_data =
+          if shuffle_every_epoch and raw_batches do
+            IO.puts("🔀 Reshuffling batches with Nx optimizations...")
+            shuffle_batches_with_nx(raw_batches)
+          else
+            train_data
+          end
+
+        # Train for one epoch and capture metrics
+        train_result =
           Backend.train(
             model.model,
             current_params,
-            train_data,
+            epoch_train_data,
             epochs: 1,
             learning_rate: learning_rate,
             optimizer: optimizer
           )
+
+        # Extract metrics from training result
+        {updated_params, epoch_metrics} = extract_training_metrics(train_result)
+
+        # Save epoch number
+        save_current_epoch(model.folder, epoch)
+
+        # Append metrics to history
+        append_metrics_to_history(model.folder, epoch, epoch_metrics)
 
         # Save checkpoint if enabled
         if save_every_epoch do
@@ -476,13 +743,96 @@ defmodule MachineLearning.Transformer do
         latest_path = Path.join([model.folder, "params", "latest.bin"])
         File.write!(latest_path, Nx.serialize(updated_params))
 
+        # Print metrics (will show N/A if not available)
+        if is_map(epoch_metrics) and map_size(epoch_metrics) > 0 do
+          loss_str = format_metric(epoch_metrics["loss"])
+          accuracy_str = format_metric(epoch_metrics["accuracy"])
+
+          unless loss_str == "N/A" and accuracy_str == "N/A" do
+            IO.puts("   Loss: #{loss_str}")
+            IO.puts("   Accuracy: #{accuracy_str}")
+          end
+        end
+
         updated_params
       end)
 
     IO.puts("\n✅ Training complete!")
+    IO.puts("   Metrics saved to: #{Path.join(model.folder, "metrics.csv")}")
 
     # Return updated model
     %{model | params: final_params}
+  end
+
+  @doc """
+  Tests a transformer model against a specific testing dataset.
+
+  Evaluates the model performance on test data using metrics like accuracy.
+
+  ## Parameters
+
+  - `model_or_path`: Either a Model struct or path to model directory
+  - `dataset_name`: Name of the testing dataset to use
+  - `opts`: Testing options
+    - `:params_version` - Which parameter version to use (default: "latest")
+
+  ## Returns
+
+  A map containing evaluation metrics (e.g., accuracy).
+
+  ## Examples
+
+      # Test model with latest parameters
+      results = MachineLearning.Transformer.test(
+        "models/small",
+        "test_elixir",
+        params_version: "latest"
+      )
+
+      # Test with specific epoch parameters
+      results = MachineLearning.Transformer.test(
+        "models/my_model",
+        "test_v1",
+        params_version: "epoch_005"
+      )
+  """
+  @spec test(Model.t() | Path.t(), String.t(), keyword()) :: map()
+  def test(model_or_path, dataset_name, opts \\ []) do
+    # Load model if path provided
+    model =
+      case model_or_path do
+        %Model{} = m ->
+          m
+
+        path when is_binary(path) ->
+          params_version = Keyword.get(opts, :params_version, "latest")
+          load(path, params_version: params_version)
+      end
+
+    IO.puts("\n🧪 Starting testing")
+    IO.puts("   Model: #{model.folder}")
+    IO.puts("   Dataset: #{dataset_name}")
+
+    # Load testing data
+    {test_data, metadata} = load_testing_data(model, dataset_name)
+    IO.puts("   Batches: #{metadata["num_batches"]}")
+    IO.puts("   Batch size: #{metadata["batch_size"]}")
+    IO.puts("   Sequence length: #{metadata["seq_len"]}\n")
+
+    # Evaluate on test data
+    IO.puts("\n📊 Evaluating model on test set...")
+
+    results =
+      Backend.evaluate(
+        model.model,
+        model.params,
+        test_data
+      )
+
+    IO.puts("\n✅ Testing complete!")
+    IO.puts("   Results: #{inspect(results)}")
+
+    results
   end
 
   @doc """
@@ -600,6 +950,43 @@ defmodule MachineLearning.Transformer do
     Tokenizer.decode(model.tokenizer, generated_ids)
   end
 
+  @spec batch_predict(Model.t() | Path.t(), list(String.t()), keyword()) :: String.t()
+  def batch_predict(model_or_path, prompts_text, opts \\ []) do
+    # Load model if path provided
+    model =
+      case model_or_path do
+        %Model{} = m -> m
+        path when is_binary(path) -> load(path)
+      end
+
+    prompts_context_len = 128
+
+    pad_token = model.tokenizer.token_to_id["<PAD>"]
+    bos_token = model.tokenizer.token_to_id["<BOS>"]
+
+    prompt_tensor =
+      prompts_text
+      |> Enum.map(&Tokenizer.encode(model.tokenizer, &1))
+      |> Enum.map(&Enum.take(&1, prompts_context_len))
+      # Padding all sequences to the same length
+      |> Enum.map(fn seq ->
+        seq = [bos_token | seq]
+        padding_length = prompts_context_len + 1 - length(seq)
+        List.duplicate(pad_token, padding_length) ++ seq
+      end)
+      |> Nx.tensor()
+
+    # Generate
+    Backend.generate(
+      model.model,
+      model.params,
+      prompt_tensor,
+      opts
+    )
+    |> Nx.to_list()
+    |> Enum.map(&Tokenizer.decode(model.tokenizer, &1))
+  end
+
   @doc """
   Lists all available parameter versions for a model.
 
@@ -658,6 +1045,35 @@ defmodule MachineLearning.Transformer do
   end
 
   @doc """
+  Lists all available testing datasets for a model.
+
+  ## Examples
+
+      MachineLearning.Transformer.list_testing_data("models/my_model")
+      # => ["test_v1", "test_v2"]
+  """
+  @spec list_testing_data(Model.t() | Path.t()) :: list(String.t())
+  def list_testing_data(model_or_path) do
+    model_dir =
+      case model_or_path do
+        %Model{folder: folder} -> folder
+        path when is_binary(path) -> path
+      end
+
+    testing_data_dir = Path.join(model_dir, "testing_data")
+
+    unless File.dir?(testing_data_dir) do
+      []
+    else
+      File.ls!(testing_data_dir)
+      |> Enum.filter(fn name ->
+        File.dir?(Path.join(testing_data_dir, name))
+      end)
+      |> Enum.sort()
+    end
+  end
+
+  @doc """
   Returns information about a model.
 
   ## Examples
@@ -687,5 +1103,114 @@ defmodule MachineLearning.Transformer do
     model_dir
     |> Map.put("available_params", list_params(model_dir["folder"]))
     |> Map.put("available_datasets", list_training_data(model_dir["folder"]))
+  end
+
+  # Shuffles batches using Nx operations for GPU-friendly computation
+  # Uses argsort with random values instead of Enum.shuffle for potential GPU acceleration
+  defp shuffle_batches_with_nx(batches) do
+    num_batches = length(batches)
+
+    # Generate random values for each batch using Nx
+    key = Nx.Random.key(System.os_time(:millisecond))
+    {random_values, _} = Nx.Random.uniform(key, shape: {num_batches})
+
+    # Get shuffle indices using argsort (optimized operation)
+    shuffle_indices =
+      random_values
+      |> Nx.argsort()
+      |> Nx.to_flat_list()
+
+    # Reorder batches using the computed indices
+    shuffle_indices
+    |> Enum.map(&Enum.at(batches, &1))
+  end
+
+  # Extract training metrics from Axon.Loop result
+  # The Backend.train returns an Axon.ModelState (the updated parameters)
+  # We'll store placeholder metrics since Axon doesn't expose per-epoch metrics easily
+  defp extract_training_metrics(train_result) when is_map(train_result) do
+    # train_result is the updated parameters map from Axon
+    # We can't easily extract metrics from Axon.Loop output
+    # So we return the params and empty metrics (users can run evaluate separately)
+    {train_result, %{"loss" => nil, "accuracy" => nil}}
+  end
+
+  defp extract_training_metrics(train_result), do: {train_result, %{}}
+
+  # Save the current epoch number to a file
+  defp save_current_epoch(model_folder, epoch) do
+    epoch_file = Path.join(model_folder, "current_epoch.txt")
+    File.write!(epoch_file, Integer.to_string(epoch))
+  end
+
+  # Get the last completed epoch (0 if no training has been done)
+  defp get_last_completed_epoch(model_folder) do
+    epoch_file = Path.join(model_folder, "current_epoch.txt")
+
+    if File.exists?(epoch_file) do
+      File.read!(epoch_file)
+      |> String.trim()
+      |> String.to_integer()
+    else
+      0
+    end
+  end
+
+  # Load or initialize metrics history
+  defp load_or_initialize_metrics_history(model_folder) do
+    metrics_file = Path.join(model_folder, "metrics.csv")
+
+    if File.exists?(metrics_file) do
+      File.read!(metrics_file)
+    else
+      # Initialize with header
+      "epoch,loss,accuracy\n"
+    end
+  end
+
+  # Append metrics to history file
+  defp append_metrics_to_history(model_folder, epoch, metrics) do
+    metrics_file = Path.join(model_folder, "metrics.csv")
+
+    # Get or create header
+    content =
+      if File.exists?(metrics_file) do
+        File.read!(metrics_file)
+      else
+        "epoch,loss,accuracy\n"
+      end
+
+    # Format metrics
+    loss = format_metric(metrics["loss"])
+    accuracy = format_metric(metrics["accuracy"])
+
+    # Append new row
+    new_row = "#{epoch},#{loss},#{accuracy}\n"
+    File.write!(metrics_file, content <> new_row)
+  end
+
+  # Format metric values for CSV
+  defp format_metric(value) when is_nil(value), do: "N/A"
+
+  defp format_metric(value) when is_number(value) do
+    # Format to 6 decimal places
+    Float.round(value, 6) |> Float.to_string()
+  end
+
+  defp format_metric(value) when is_float(value) do
+    Float.round(value, 6) |> Float.to_string()
+  end
+
+  defp format_metric(value) do
+    # For Nx tensors or other types
+    case value do
+      %Nx.Tensor{} ->
+        value
+        |> Nx.to_number()
+        |> format_metric()
+
+      _ ->
+        inspect(value)
+    end
   end
 end

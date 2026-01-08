@@ -619,14 +619,14 @@ defmodule MachineLearning.Transformer.Backend do
     repetition_penalty = Keyword.get(opts, :repetition_penalty, 1.2)
     no_repeat_ngram = Keyword.get(opts, :no_repeat_ngram_size, 3)
 
-    {_batch_size, prompt_len} = Nx.shape(prompt_tokens)
+    {batch_size, _prompt_len} = Nx.shape(prompt_tokens)
 
     # Autoregressive generation with repetition tracking
     # Note: EXLA compiler automatically caches and reuses compiled functions
     # for the same input shapes, providing JIT-like speedup
-    Enum.reduce(prompt_len..(max_length - 1), prompt_tokens, fn _step, current_tokens ->
+    Enum.reduce(0..max_length, prompt_tokens, fn _step, current_tokens ->
       # Predict next token with anti-repetition measures
-      next_token =
+      next_tokens =
         predict_next_token(
           model,
           params,
@@ -637,9 +637,10 @@ defmodule MachineLearning.Transformer.Backend do
           repetition_penalty,
           no_repeat_ngram
         )
+        |> Nx.reshape({batch_size, 1})
 
       # Append to sequence
-      Nx.concatenate([current_tokens, Nx.reshape(next_token, {1, 1})], axis: 1)
+      Nx.concatenate([current_tokens, next_tokens], axis: 1)
     end)
   end
 
@@ -778,13 +779,19 @@ defmodule MachineLearning.Transformer.Backend do
 
     # Step 4: Sample from the distribution (using categorical sampling)
     # Convert to flat list and sample
-    probs_list = probs |> Nx.to_flat_list()
-    indices_list = top_k_indices |> Nx.to_flat_list()
+    probs_list = probs |> Nx.to_list()
+    indices_list = top_k_indices |> Nx.to_list()
+
+    pobs_indices = Enum.zip(probs_list, indices_list)
 
     # Sample token (weighted by probability)
-    sampled_token = weighted_random_sample(probs_list, indices_list)
 
-    Nx.tensor([sampled_token])
+    sampled_tokens =
+      Enum.map(pobs_indices, fn {probs_list, indices_list} ->
+        weighted_random_sample(probs_list, indices_list)
+      end)
+
+    Nx.tensor(sampled_tokens)
   end
 
   # Weighted random sampling
