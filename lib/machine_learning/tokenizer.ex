@@ -18,13 +18,21 @@ defmodule MachineLearning.Tokenizer do
   alias MachineLearning.BytePairEncoding
   alias MachineLearning.BytePairEncoding.Token
 
-  defstruct [:vocab, :token_to_id, :id_to_token, :vocab_size]
+  defstruct [:vocab, :token_to_id, :id_to_token, :vocab_size, :vocab_map]
+
+  @type vocab_map :: %{
+          String.t() => %{
+            is_token?: boolean(),
+            children: vocab_map()
+          }
+        }
 
   @type t :: %__MODULE__{
           vocab: list(Token.t()),
           token_to_id: map(),
           id_to_token: map(),
-          vocab_size: integer()
+          vocab_size: integer(),
+          vocab_map: vocab_map()
         }
 
   @doc """
@@ -75,7 +83,8 @@ defmodule MachineLearning.Tokenizer do
       vocab: full_vocab,
       token_to_id: token_to_id,
       id_to_token: id_to_token,
-      vocab_size: length(full_vocab)
+      vocab_size: length(full_vocab),
+      vocab_map: vocab_map_from_vocab(full_vocab)
     }
   end
 
@@ -163,9 +172,9 @@ defmodule MachineLearning.Tokenizer do
     max_length = Keyword.get(opts, :max_length)
     padding = Keyword.get(opts, :padding, false)
 
-    # Tokenize text into BPE tokens
+    # Tokenize text into BPE tokens using trie-based approach
     graphemes = String.graphemes(text)
-    tokens = BytePairEncoding.tokenize(graphemes, tokenizer.vocab)
+    tokens = tokenize(graphemes, tokenizer)
 
     # Convert tokens to IDs
     token_ids =
@@ -259,6 +268,175 @@ defmodule MachineLearning.Tokenizer do
     end)
     |> Enum.join("")
     |> sanitize_unicode()
+  end
+
+  defmodule TokenizationStep do
+    defstruct [:latest_valid_token, :sub_step, :completed_sub_steps, :vocab_map, :current_text]
+
+    @type t :: %__MODULE__{
+            latest_valid_token: String.t(),
+            sub_step: t() | nil,
+            completed_sub_steps: list(String.t()),
+            vocab_map: MachineLearning.Tokenizer.vocab_map(),
+            current_text: String.t()
+          }
+
+    def new(vocab_map) do
+      %__MODULE__{
+        latest_valid_token: "",
+        sub_step: nil,
+        completed_sub_steps: [],
+        vocab_map: vocab_map,
+        current_text: ""
+      }
+    end
+
+    def perform_step(%__MODULE__{} = step, grapheme, full_vocab_map) do
+      case {step.latest_valid_token, step.vocab_map[grapheme]} do
+        {"", nil} ->
+          # This tokens is not part of the vocab - emit as is
+
+          # just doing some sanity checks
+          [] = step.completed_sub_steps
+          nil = step.sub_step
+
+          new_sub_step = new(full_vocab_map)
+          {[grapheme], new_sub_step}
+
+        {latest_token, nil} ->
+          # This step is now complete - emit any latest valid token
+          {additional_tokens, new_sub_step} =
+            perform_step(step.sub_step, grapheme, full_vocab_map)
+
+          emitted_tokens = [latest_token | step.completed_sub_steps ++ additional_tokens]
+          {emitted_tokens, new_sub_step}
+
+        {latest_token, %{is_token?: true, children: children}} ->
+          # Found a valid token - update latest_valid_token and continue
+          new_sub_step = new(full_vocab_map)
+
+          step = %{
+            step
+            | latest_valid_token: step.current_text <> grapheme,
+              vocab_map: children,
+              sub_step: new_sub_step,
+              completed_sub_steps: [],
+              current_text: step.current_text <> grapheme
+          }
+
+          {[], step}
+
+        {latest_token, %{is_token?: false, children: children}} ->
+          # Continue traversing the trie
+          {emitted_tokens, new_sub_step} = perform_step(step.sub_step, grapheme, full_vocab_map)
+
+          step = %{
+            step
+            | vocab_map: children,
+              sub_step: new_sub_step,
+              completed_sub_steps: step.completed_sub_steps ++ emitted_tokens,
+              current_text: step.current_text <> grapheme
+          }
+
+          {[], step}
+      end
+    end
+
+    def unwrap_steps(%__MODULE__{} = step) do
+      case step.latest_valid_token do
+        "" -> []
+        token -> [token]
+      end ++
+        step.completed_sub_steps ++
+        case step.sub_step do
+          nil -> []
+          sub_step -> unwrap_steps(sub_step)
+        end
+    end
+  end
+
+  @doc """
+  Tokenizes a list of graphemes using the vocab_map trie for efficient lookup.
+
+  Uses a greedy longest-match algorithm that traverses the trie to find the
+  longest possible tokens at each position.
+
+  ## Parameters
+
+  - `graphemes`: List of graphemes (characters) to tokenize
+  - `tokenizer`: The tokenizer struct containing the vocab_map
+
+  ## Returns
+
+  List of Token structs and/or string graphemes for unrecognized characters
+
+  ## Examples
+
+      iex> graphemes = String.graphemes("hello")
+      iex> MachineLearning.Tokenizer.tokenize(graphemes, tokenizer)
+      [%Token{value: "hello"}]
+  """
+  @spec tokenize(list(String.t()), t()) :: list(Token.t() | String.t())
+  def tokenize(graphemes, %__MODULE__{vocab_map: vocab_map, token_to_id: token_to_id}) do
+    graphemes
+    |> Enum.reduce(
+      {TokenizationStep.new(vocab_map), []},
+      fn grapheme, {state, tokens_acc} ->
+        {emitted_tokens, new_state} = TokenizationStep.perform_step(state, grapheme, vocab_map)
+
+        {
+          new_state,
+          tokens_acc ++ emitted_tokens
+        }
+      end
+    )
+    |> then(fn {final_state, tokens_acc} ->
+      tokens_acc ++ TokenizationStep.unwrap_steps(final_state)
+    end)
+  end
+
+  ## Private helper functions
+
+  defp vocab_map_from_vocab(vocab) do
+    vocab
+    |> Enum.map(fn token -> token.value end)
+    |> Enum.reduce(%{}, fn token, acc -> add_token_to_map(acc, token) end)
+  end
+
+  @doc false
+  @spec add_token_to_map(vocab_map(), String.t()) :: vocab_map()
+  defp add_token_to_map(map, token) do
+    add_token_recursive(map, String.graphemes(token), [])
+  end
+
+  # Recursively add a token to the trie structure
+  # When we've consumed all characters, mark this node as a token
+  defp add_token_recursive(map, [], _path) do
+    map
+  end
+
+  defp add_token_recursive(map, [char | rest], path) do
+    current_key = char
+    is_final = rest == []
+
+    # Get or create entry for this character
+    entry = Map.get(map, current_key, %{is_token?: false, children: %{}})
+
+    # If this is the final character, mark it as a token
+    entry =
+      if is_final do
+        Map.put(entry, :is_token?, true)
+      else
+        entry
+      end
+
+    # Recursively add the rest of the characters to children
+    children = Map.get(entry, :children, %{})
+    updated_children = add_token_recursive(children, rest, path ++ [char])
+
+    # Update the entry with the new children
+    updated_entry = Map.put(entry, :children, updated_children)
+    Map.put(map, current_key, updated_entry)
   end
 
   # Sanitize the decoded text to ensure valid UTF-8 and printable characters

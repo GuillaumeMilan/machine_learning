@@ -2,6 +2,34 @@ defmodule MachineLearning.BytePairEncoding do
   require Logger
   alias MachineLearning.BytePairEncoding.Token
 
+  @moduledoc """
+  Module for Byte Pair Encoding (BPE) tokenization.
+
+  This module provides functionalities to create a corpus from source files,
+  compress the corpus using BPE, and encode new data using the generated tokens.
+
+
+  ## Example
+
+      iex> source_dir = "path/to/source/files"
+      iex> corpus_dir = "path/to/corpus"
+      iex> MachineLearning.BytePairEncoding.add_to_corpus(source_dir, corpus_dir)
+      :ok
+      iex> expected_vocab_size = 1000
+      iex> tokens = MachineLearning.BytePairEncoding.compress(corpus_dir, expected_vocab_size)
+
+
+  You can recover from previous run by loading saved tokens:
+
+      iex> saved_tokens = MachineLearning.BytePairEncoding.load("path/to/saved_tokens.bert")
+      iex> tokens = MachineLearning.BytePairEncoding.compress(corpus_dir, expected_vocab_size, %{initial_tokens: saved_tokens})
+
+
+  You can also specify where to save the cache during compression:
+
+      iex> tokens = MachineLearning.BytePairEncoding.compress(corpus_dir, expected_vocab_size, %{save_path: "path/to/saved_tokens.bert"})
+  """
+
   @default_extensions [
     ".ex",
     ".exs",
@@ -25,10 +53,15 @@ defmodule MachineLearning.BytePairEncoding do
     ".toml"
   ]
 
-  @max_concurrency 5
+  @max_concurrency 10
 
   def save(tokens, filename) do
     File.write!(filename, :erlang.term_to_binary(tokens))
+  end
+
+  def load(filename) do
+    File.read!(filename)
+    |> :erlang.binary_to_term()
   end
 
   @spec add_to_corpus(Path.t(), Path.t()) :: :ok
@@ -64,17 +97,38 @@ defmodule MachineLearning.BytePairEncoding do
     end)
   end
 
-  def compress(corpus_directory, expected_vocabulary_size, tokens \\ []) do
-    create_cache()
-    |> tap(fn _ -> Logger.info("Created new cache for compression...") end)
-    |> insert_filenames_to_cache(corpus_directory)
-    |> tap(fn _ -> Logger.info("Inserted filenames to cache...") end)
-    |> populate_cache_with_tokenized_files(tokens)
-    |> tap(fn _ -> Logger.info("Populated cache with tokenized files...") end)
-    |> do_compress(expected_vocabulary_size, tokens)
+  def compress(corpus_directory, expected_vocabulary_size, opts \\ %{}) do
+    tokens = Map.get(opts, :initial_tokens, [])
+    save_path = Map.get(opts, :save_path, nil)
+    cache_file = Map.get(opts, :cache_file, nil)
+
+    setup_or_load_cache(corpus_directory, cache_file, tokens)
+    |> do_compress(expected_vocabulary_size, save_path)
   end
 
-  defp do_compress(cache, expected_vocabulary_size, tokens) do
+  defp setup_or_load_cache(corpus_directory, cache_file, tokens) do
+    cond do
+      is_nil(cache_file) or not File.exists?(cache_file) ->
+        Logger.info("Setting up new cache...")
+
+        :ets.new(:byte_pair_encoding_cache, [:set, :public])
+        |> tap(fn _ -> Logger.info("Created new cache for compression...") end)
+        |> insert_filenames_to_cache(corpus_directory)
+        |> tap(fn _ -> Logger.info("Inserted filenames to cache...") end)
+        |> insert_tokens_to_cache(tokens)
+        |> tap(fn _ -> Logger.info("Inserted initial tokens to cache...") end)
+        |> populate_cache_with_tokenized_files(tokens)
+        |> tap(fn _ -> Logger.info("Populated cache with tokenized files...") end)
+
+      true ->
+        Logger.info("Cache loaded from file, skipping setup...")
+        :ets.file2tab(String.to_charlist(cache_file))
+    end
+  end
+
+  defp do_compress(cache, expected_vocabulary_size, save_path) do
+    tokens = get_tokens_from_cache(cache)
+
     {frequencies, elements} =
       cache
       |> calculate_frequency()
@@ -115,63 +169,17 @@ defmodule MachineLearning.BytePairEncoding do
       new_tokens = [highest_freq_token | new_tokens]
 
       Logger.info("New tokens to add: #{inspect(new_tokens)}")
-      File.write!("/tmp/bpe_save.bert", :erlang.term_to_binary(new_tokens ++ tokens))
-      Logger.info("Tokens saved to /tmp/bpe_save.bert")
 
       retokenize_cache(cache, new_tokens)
-      do_compress(cache, expected_vocabulary_size, new_tokens ++ tokens)
+      insert_tokens_to_cache(cache, new_tokens ++ tokens)
+
+      if save_path do
+        persist_table(cache, save_path)
+        Logger.info("Cache saved to #{save_path}")
+      end
+
+      do_compress(cache, expected_vocabulary_size, save_path)
     end
-  end
-
-  def encode(corpus_directory, vocab_size, bytes_map \\ []) do
-    Logger.info("Generating Byte Pair Encoding with vocab size #{vocab_size}...")
-    cache = generate_cache(corpus_directory, bytes_map)
-    Logger.info("Cache populated...")
-
-    do_encode(cache, vocab_size, bytes_map)
-  end
-
-  defp do_encode(cache, vocab_size, bytes_map) do
-    Logger.info("Encoding step with current vocab size #{length(bytes_map)}...")
-
-    token =
-      get_frequencies_from_cache(cache)
-      |> Enum.max_by(fn {_token, freq} -> freq end)
-      |> then(fn {token, _freq} -> token end)
-
-    bytes_map = [token | bytes_map]
-
-    Logger.info("Selected token: #{inspect(token.value)}")
-
-    if length(bytes_map) < vocab_size do
-      refresh_cache(cache, [token])
-      refresh_frequencies(cache, token)
-      do_encode(cache, vocab_size, bytes_map)
-    else
-      :ets.delete(cache)
-      bytes_map
-    end
-  end
-
-  defp generate_corpus_frequencies(cache, token \\ nil) do
-    iterate_cache(cache)
-    |> Stream.chunk_every(250)
-    |> Task.async_stream(
-      fn chunk ->
-        Enum.reduce(chunk, %{}, fn content, acc ->
-          freq_map = generate_frequency(content, token)
-          Map.merge(acc, freq_map, fn _key, val1, val2 -> val1 + val2 end)
-        end)
-      end,
-      max_concurrency: @max_concurrency,
-      timeout: :infinity
-    )
-    |> Enum.reduce(%{}, fn {:ok, freq_map}, acc ->
-      Map.merge(acc, freq_map, fn _key, val1, val2 -> val1 + val2 end)
-    end)
-    |> Map.new(fn {{a, b}, freq} ->
-      {Token.new(a, b), freq}
-    end)
   end
 
   # TODO optimize
@@ -191,62 +199,34 @@ defmodule MachineLearning.BytePairEncoding do
     end
   end
 
-  defp generate_cache(corpus_directory, bytes_map) do
-    start = System.monotonic_time(:millisecond)
-    Logger.info("Generating cache from corpus directory #{corpus_directory}...")
-    cache = :ets.new(:byte_pair_encoding_cache, [:set, :public])
-
-    filenames = list_files(corpus_directory) |> Enum.to_list()
-    :ets.insert(cache, {:__filenames__, filenames})
-
-    filenames
-    |> Stream.chunk_every(250)
-    |> Task.async_stream(
-      fn chunk ->
-        Enum.each(chunk, fn filename ->
-          content = File.read!(filename) |> String.graphemes()
-          :ets.insert(cache, {filename, content})
-        end)
-      end,
-      max_concurrency: @max_concurrency,
-      timeout: :infinity
-    )
-    |> Stream.run()
-
-    Logger.info("Cache populated in #{System.monotonic_time(:millisecond) - start} ms.")
-
-    bytes_map
-    |> Enum.reverse()
-    |> then(&refresh_cache(cache, &1))
-
-    frequencies = generate_corpus_frequencies(cache)
-    :ets.insert(cache, {:__frequencies__, frequencies})
-
-    Logger.info("Cache generated in #{System.monotonic_time(:millisecond) - start} ms.")
-    cache
-  end
-
-  defp create_cache() do
-    :ets.new(:byte_pair_encoding_cache, [:set, :public])
-  end
-
   defp insert_filenames_to_cache(cache, corpus_directory) do
     filenames = list_files(corpus_directory) |> Enum.to_list()
     :ets.insert(cache, {:__filenames__, filenames})
     cache
   end
 
+  defp insert_tokens_to_cache(cache, tokens) do
+    :ets.insert(cache, {:__tokens__, tokens})
+    cache
+  end
+
   defp populate_cache_with_tokenized_files(cache, tokens) do
     start = System.monotonic_time(:millisecond)
+    file_count = list_files_from_cache(cache) |> Enum.count()
+
+    IO.write("Populated 0/#{file_count}")
 
     list_files_from_cache(cache)
     |> Stream.chunk_every(250)
+    |> Stream.with_index()
     |> Task.async_stream(
-      fn chunk ->
+      fn {chunk, index} ->
         Enum.each(chunk, fn filename ->
           content = File.read!(filename) |> String.graphemes() |> tokenize(tokens)
           :ets.insert(cache, {filename, content})
         end)
+
+        IO.write("\rPopulated #{index * 250}/#{file_count}")
       end,
       max_concurrency: @max_concurrency,
       timeout: :infinity
@@ -327,7 +307,7 @@ defmodule MachineLearning.BytePairEncoding do
           {b, acc}
 
         token = Enum.find(tokens, fn token -> "#{prev}#{b}" == token.value end) ->
-          {nil, [token | acc]}
+          {nil, [token.value | acc]}
 
         true ->
           {b, [prev | acc]}
@@ -336,46 +316,6 @@ defmodule MachineLearning.BytePairEncoding do
     |> then(fn {prev, acc} -> [prev | acc] end)
     |> Enum.reject(&is_nil/1)
     |> Enum.reverse()
-  end
-
-  defp refresh_cache(cache, tokens) do
-    start = System.monotonic_time(:millisecond)
-
-    list_files_from_cache(cache)
-    |> Stream.chunk_every(250)
-    |> Task.async_stream(
-      fn chunk ->
-        Enum.each(chunk, fn filename ->
-          [{_, content}] =
-            :ets.lookup(cache, filename)
-
-          new_content =
-            case tokens do
-              [token] -> replace_token(content, token)
-              _ -> tokenize(content, tokens)
-            end
-
-          :ets.insert(cache, {filename, new_content})
-        end)
-      end,
-      max_concurrency: @max_concurrency,
-      timeout: :infinity
-    )
-    |> Stream.run()
-    |> tap(fn _ ->
-      Logger.info("Cache content refreshed in #{System.monotonic_time(:millisecond) - start} ms.")
-    end)
-  end
-
-  defp refresh_frequencies(cache, token) do
-    start = System.monotonic_time(:millisecond)
-
-    current_frequencies = Map.delete(get_frequencies_from_cache(cache), token)
-
-    frequencies = generate_corpus_frequencies(cache, token)
-    new_frequencies = Map.merge(frequencies, current_frequencies)
-    :ets.insert(cache, {:__frequencies__, new_frequencies})
-    Logger.info("Frequencies refreshed in #{System.monotonic_time(:millisecond) - start} ms.")
   end
 
   @spec tokenize(list(String.t()), list(Token.t())) :: list(String.t() | Token.t())
@@ -389,7 +329,7 @@ defmodule MachineLearning.BytePairEncoding do
       |> Enum.reduce({nil, []}, fn token, {selected_token, acc} ->
         cond do
           combined == token.value ->
-            {token, acc}
+            {combined, acc}
 
           String.starts_with?(token.value, combined) ->
             {selected_token, [token | acc]}
@@ -399,10 +339,6 @@ defmodule MachineLearning.BytePairEncoding do
         end
       end)
       |> case do
-        # Can be merged into a single token
-        {%Token{} = token, tokens} ->
-          {[token], tokens, acc}
-
         # No matching token possible in the future, flush prevs
         {nil, []} ->
           {[b], original_tokens, prevs ++ acc}
@@ -410,47 +346,19 @@ defmodule MachineLearning.BytePairEncoding do
         # Still possible to merge with future bytes
         {nil, tokens} ->
           {[b | prevs], tokens, acc}
+
+        # Can be merged into a single token
+        {token, tokens} ->
+          {[token], tokens, acc}
       end
     end)
     |> then(fn {prevs, _, acc} -> prevs ++ acc end)
     |> Enum.reverse()
   end
 
-  def clean_tokens(tokens, corpus_directory) do
-    cache = generate_cache(corpus_directory, tokens)
-
-    existing_tokens =
-      get_frequencies_from_cache(cache)
-      |> Map.keys()
-      |> MapSet.new()
-
-    :ets.delete(cache)
-
-    Enum.filter(tokens, fn token -> MapSet.member?(existing_tokens, token) end)
-  end
-
-  defp replace_token([a | rem], token) do
-    Enum.reduce(rem, {a, []}, fn b, {prev, acc} ->
-      if "#{prev}#{b}" == token.value do
-        {token, acc}
-      else
-        {b, [prev | acc]}
-      end
-    end)
-    |> then(fn {last, acc} -> [last | acc] end)
-    |> Enum.reverse()
-  end
-
-  defp replace_token(rem, _pair), do: rem
-
   defp iterate_cache(cache) do
     list_files_from_cache(cache)
     |> Stream.map(&get_from_cache(cache, &1))
-  end
-
-  defp get_frequencies_from_cache(cache) do
-    [{_, frequencies}] = :ets.lookup(cache, :__frequencies__)
-    frequencies
   end
 
   defp list_files_from_cache(cache) do
@@ -461,6 +369,17 @@ defmodule MachineLearning.BytePairEncoding do
   defp get_from_cache(cache, filename) do
     [{_, content}] = :ets.lookup(cache, filename)
     content
+  end
+
+  defp get_tokens_from_cache(cache) do
+    case :ets.lookup(cache, :__tokens__) do
+      [{_, tokens}] -> tokens
+      [] -> []
+    end
+  end
+
+  defp persist_table(cache, filename) do
+    :ets.tab2file(cache, String.to_charlist(filename))
   end
 
   @spec corpus_file_path(String.t()) :: Path.t()
