@@ -29,7 +29,8 @@ defmodule MachineLearning.MixProject do
       # {:exla, "~> 0.10.0"},
       {:image, "~> 0.53.0"},
       {:axon, "~> 0.8.0"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:benchee, "~> 1.0", only: :dev}
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
   end

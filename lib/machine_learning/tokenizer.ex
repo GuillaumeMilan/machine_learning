@@ -270,96 +270,8 @@ defmodule MachineLearning.Tokenizer do
     |> sanitize_unicode()
   end
 
-  defmodule TokenizationStep do
-    defstruct [:latest_valid_token, :sub_step, :completed_sub_steps, :vocab_map, :current_text]
-
-    @type t :: %__MODULE__{
-            latest_valid_token: String.t(),
-            sub_step: t() | nil,
-            completed_sub_steps: list(String.t()),
-            vocab_map: MachineLearning.Tokenizer.vocab_map(),
-            current_text: String.t()
-          }
-
-    def new(vocab_map) do
-      %__MODULE__{
-        latest_valid_token: "",
-        sub_step: nil,
-        completed_sub_steps: [],
-        vocab_map: vocab_map,
-        current_text: ""
-      }
-    end
-
-    def perform_step(%__MODULE__{} = step, grapheme, full_vocab_map) do
-      case {step.latest_valid_token, step.vocab_map[grapheme]} do
-        {"", nil} ->
-          # This tokens is not part of the vocab - emit as is
-
-          # just doing some sanity checks
-          [] = step.completed_sub_steps
-          nil = step.sub_step
-
-          new_sub_step = new(full_vocab_map)
-          {[grapheme], new_sub_step}
-
-        {latest_token, nil} ->
-          # This step is now complete - emit any latest valid token
-          {additional_tokens, new_sub_step} =
-            perform_step(step.sub_step, grapheme, full_vocab_map)
-
-          emitted_tokens = [latest_token | step.completed_sub_steps ++ additional_tokens]
-          {emitted_tokens, new_sub_step}
-
-        {latest_token, %{is_token?: true, children: children}} ->
-          # Found a valid token - update latest_valid_token and continue
-          new_sub_step = new(full_vocab_map)
-
-          step = %{
-            step
-            | latest_valid_token: step.current_text <> grapheme,
-              vocab_map: children,
-              sub_step: new_sub_step,
-              completed_sub_steps: [],
-              current_text: step.current_text <> grapheme
-          }
-
-          {[], step}
-
-        {latest_token, %{is_token?: false, children: children}} ->
-          # Continue traversing the trie
-          {emitted_tokens, new_sub_step} = perform_step(step.sub_step, grapheme, full_vocab_map)
-
-          step = %{
-            step
-            | vocab_map: children,
-              sub_step: new_sub_step,
-              completed_sub_steps: step.completed_sub_steps ++ emitted_tokens,
-              current_text: step.current_text <> grapheme
-          }
-
-          {[], step}
-      end
-    end
-
-    def unwrap_steps(%__MODULE__{} = step) do
-      case step.latest_valid_token do
-        "" -> []
-        token -> [token]
-      end ++
-        step.completed_sub_steps ++
-        case step.sub_step do
-          nil -> []
-          sub_step -> unwrap_steps(sub_step)
-        end
-    end
-  end
-
   @doc """
-  Tokenizes a list of graphemes using the vocab_map trie for efficient lookup.
-
-  Uses a greedy longest-match algorithm that traverses the trie to find the
-  longest possible tokens at each position.
+  Optimized tokenization using greedy longest-match algorithm.
 
   ## Parameters
 
@@ -373,26 +285,100 @@ defmodule MachineLearning.Tokenizer do
   ## Examples
 
       iex> graphemes = String.graphemes("hello")
-      iex> MachineLearning.Tokenizer.tokenize(graphemes, tokenizer)
+      iex> MachineLearning.TokenizerOptimized.tokenize(graphemes, tokenizer)
       [%Token{value: "hello"}]
   """
-  @spec tokenize(list(String.t()), t()) :: list(Token.t() | String.t())
-  def tokenize(graphemes, %__MODULE__{vocab_map: vocab_map, token_to_id: token_to_id}) do
-    graphemes
-    |> Enum.reduce(
-      {TokenizationStep.new(vocab_map), []},
-      fn grapheme, {state, tokens_acc} ->
-        {emitted_tokens, new_state} = TokenizationStep.perform_step(state, grapheme, vocab_map)
+  @spec tokenize(list(String.t()), MachineLearning.Tokenizer.t()) :: list(Token.t() | String.t())
+  def tokenize(graphemes, %MachineLearning.Tokenizer{vocab_map: vocab_map}) do
+    tokenize_greedy(graphemes, vocab_map, [])
+    |> Enum.reverse()
+  end
 
-        {
-          new_state,
-          tokens_acc ++ emitted_tokens
-        }
-      end
-    )
-    |> then(fn {final_state, tokens_acc} ->
-      tokens_acc ++ TokenizationStep.unwrap_steps(final_state)
-    end)
+  # Greedy longest-match tokenization
+  defp tokenize_greedy([], _vocab_map, acc), do: acc
+
+  defp tokenize_greedy(graphemes, vocab_map, acc) do
+    case find_longest_token(graphemes, vocab_map) do
+      {token, remaining} when token != "" ->
+        # Found a token, emit it and continue with remaining graphemes
+        tokenize_greedy(remaining, vocab_map, [token | acc])
+
+      {_, [grapheme | remaining]} ->
+        # No token found, emit single character and continue
+        tokenize_greedy(remaining, vocab_map, [grapheme | acc])
+
+      {_, []} ->
+        # Edge case: empty remaining list
+        acc
+    end
+  end
+
+  # Find the longest possible token starting from the beginning of graphemes
+  defp find_longest_token(graphemes, vocab_map) do
+    find_longest_recursive(graphemes, vocab_map, "", graphemes, 0, 0)
+  end
+
+  # Recursively find the longest token match
+  # current_chars: characters we're currently checking
+  # best_token: longest valid token found so far
+  # best_length: length of the best token found
+  defp find_longest_recursive(
+         [],
+         _vocab_map,
+         best_token,
+         original_graphemes,
+         best_length,
+         _current_length
+       ) do
+    if best_length > 0 do
+      {best_token, Enum.drop(original_graphemes, best_length)}
+    else
+      {"", original_graphemes}
+    end
+  end
+
+  defp find_longest_recursive(
+         [char | rest],
+         current_map,
+         best_token,
+         original_graphemes,
+         best_length,
+         current_length
+       ) do
+    case Map.get(current_map, char) do
+      nil ->
+        # No further matches possible, return best found so far
+        if best_length > 0 do
+          {best_token, Enum.drop(original_graphemes, best_length)}
+        else
+          {"", original_graphemes}
+        end
+
+      %{is_token?: true, children: children} ->
+        # This is a valid token, update best and continue looking for longer ones
+        current_token = Enum.take(original_graphemes, current_length + 1) |> Enum.join()
+        new_best_length = current_length + 1
+
+        find_longest_recursive(
+          rest,
+          children,
+          current_token,
+          original_graphemes,
+          new_best_length,
+          current_length + 1
+        )
+
+      %{is_token?: false, children: children} ->
+        # Partial match, continue building but don't update best token
+        find_longest_recursive(
+          rest,
+          children,
+          best_token,
+          original_graphemes,
+          best_length,
+          current_length + 1
+        )
+    end
   end
 
   ## Private helper functions

@@ -213,6 +213,7 @@ defmodule MachineLearning.BytePairEncoding do
   defp populate_cache_with_tokenized_files(cache, tokens) do
     start = System.monotonic_time(:millisecond)
     file_count = list_files_from_cache(cache) |> Enum.count()
+    tokenizer = MachineLearning.Tokenizer.from_vocab(tokens)
 
     IO.write("Populated 0/#{file_count}")
 
@@ -222,7 +223,7 @@ defmodule MachineLearning.BytePairEncoding do
     |> Task.async_stream(
       fn {chunk, index} ->
         Enum.each(chunk, fn filename ->
-          content = File.read!(filename) |> String.graphemes() |> tokenize(tokens)
+          content = File.read!(filename) |> String.graphemes() |> tokenize(tokenizer)
           :ets.insert(cache, {filename, content})
         end)
 
@@ -318,42 +319,8 @@ defmodule MachineLearning.BytePairEncoding do
     |> Enum.reverse()
   end
 
-  @spec tokenize(list(String.t()), list(Token.t())) :: list(String.t() | Token.t())
-  def tokenize(content, original_tokens) do
-    content
-    |> Enum.reduce({[], original_tokens, []}, fn b, {prevs, tokens, acc} ->
-      prevs_str = prevs |> Enum.reverse() |> Enum.join()
-      combined = "#{prevs_str}#{b}"
-
-      tokens
-      |> Enum.reduce({nil, []}, fn token, {selected_token, acc} ->
-        cond do
-          combined == token.value ->
-            {combined, acc}
-
-          String.starts_with?(token.value, combined) ->
-            {selected_token, [token | acc]}
-
-          true ->
-            {selected_token, acc}
-        end
-      end)
-      |> case do
-        # No matching token possible in the future, flush prevs
-        {nil, []} ->
-          {[b], original_tokens, prevs ++ acc}
-
-        # Still possible to merge with future bytes
-        {nil, tokens} ->
-          {[b | prevs], tokens, acc}
-
-        # Can be merged into a single token
-        {token, tokens} ->
-          {[token], tokens, acc}
-      end
-    end)
-    |> then(fn {prevs, _, acc} -> prevs ++ acc end)
-    |> Enum.reverse()
+  defp tokenize(content, tokenizer) do
+    MachineLearning.Tokenizer.tokenize(content, tokenizer)
   end
 
   defp iterate_cache(cache) do
