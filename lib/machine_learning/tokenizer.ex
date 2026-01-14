@@ -15,7 +15,6 @@ defmodule MachineLearning.Tokenizer do
   - `<EOS>` (ID: 3) - End of sequence token added at the end of text sequences
   """
 
-  alias MachineLearning.BytePairEncoding
   alias MachineLearning.BytePairEncoding.Token
 
   defstruct [:vocab, :token_to_id, :id_to_token, :vocab_size, :vocab_map]
@@ -172,17 +171,11 @@ defmodule MachineLearning.Tokenizer do
     max_length = Keyword.get(opts, :max_length)
     padding = Keyword.get(opts, :padding, false)
 
-    # Tokenize text into BPE tokens using trie-based approach
-    graphemes = String.graphemes(text)
-    tokens = tokenize(graphemes, tokenizer)
-
-    # Convert tokens to IDs
     token_ids =
-      tokens
-      |> Enum.map(fn
-        %Token{value: value} -> Map.get(tokenizer.token_to_id, value, unk_id())
-        grapheme when is_binary(grapheme) -> Map.get(tokenizer.token_to_id, grapheme, unk_id())
-      end)
+      text
+      |> String.graphemes()
+      |> tokenize(tokenizer)
+      |> map(tokenizer)
 
     # Add special tokens if requested
     token_ids =
@@ -294,6 +287,26 @@ defmodule MachineLearning.Tokenizer do
     |> Enum.reverse()
   end
 
+  @doc """
+  Maps tokens to their corresponding IDs.
+  ## Parameters
+  - `tokens`: List of Token structs or string graphemes
+  - `tokenizer`: The tokenizer struct containing the token_to_id mapping
+  ## Returns
+  List of integer token IDs
+  ## Examples
+      iex> tokens = [%Token{value: "hello"}, %Token{value: "world"}]
+      iex> MachineLearning.Tokenizer.map(tokens, tokenizer)
+      [42, 127]
+  """
+  @spec map(list(Token.t() | String.t()), MachineLearning.Tokenizer.t()) :: list(integer())
+  def map(tokens, %MachineLearning.Tokenizer{token_to_id: token_to_id}) do
+    Enum.map(tokens, fn
+      %Token{value: value} -> Map.get(token_to_id, value, unk_id())
+      grapheme when is_binary(grapheme) -> Map.get(token_to_id, grapheme, unk_id())
+    end)
+  end
+
   # Greedy longest-match tokenization
   defp tokenize_greedy([], _vocab_map, acc), do: acc
 
@@ -379,6 +392,184 @@ defmodule MachineLearning.Tokenizer do
           current_length + 1
         )
     end
+  end
+
+  # Private corpus verification functions
+
+  @spec collect_corpus_files_for_verification(Path.t(), list(String.t()), integer() | nil) ::
+          {:ok, list(Path.t())} | {:error, term()}
+  defp collect_corpus_files_for_verification(corpus_directory, extensions, max_files) do
+    if File.exists?(corpus_directory) do
+      files =
+        corpus_directory
+        |> File.ls!()
+        |> Enum.map(&Path.join(corpus_directory, &1))
+        |> Enum.flat_map(fn path ->
+          if File.dir?(path) do
+            collect_files_recursively(path, extensions)
+          else
+            if Path.extname(path) in extensions, do: [path], else: []
+          end
+        end)
+        |> then(fn files ->
+          if max_files, do: Enum.take(files, max_files), else: files
+        end)
+
+      {:ok, files}
+    else
+      {:error, "Corpus directory does not exist: #{corpus_directory}"}
+    end
+  end
+
+  @spec collect_files_recursively(Path.t(), list(String.t())) :: list(Path.t())
+  defp collect_files_recursively(directory, extensions) do
+    try do
+      directory
+      |> File.ls!()
+      |> Enum.flat_map(fn filename ->
+        full_path = Path.join(directory, filename)
+
+        cond do
+          File.dir?(full_path) ->
+            collect_files_recursively(full_path, extensions)
+
+          Path.extname(full_path) in extensions ->
+            [full_path]
+
+          true ->
+            []
+        end
+      end)
+    rescue
+      _ -> []
+    end
+  end
+
+  @spec analyze_corpus_with_tokenizer(t(), list(Path.t()), integer()) ::
+          {:ok, map()} | {:error, term()}
+  defp analyze_corpus_with_tokenizer(tokenizer, files, sample_size) do
+    try do
+      # Initialize tracking state
+      all_vocab_tokens = MapSet.new(tokenizer.vocab, fn token -> token.value end)
+      used_tokens = MapSet.new()
+      total_characters = 0
+      total_tokens = 0
+      unk_count = 0
+      unk_sequences = []
+
+      # Process each file and accumulate statistics
+      {used_tokens, total_characters, total_tokens, unk_count, unk_sequences} =
+        Enum.reduce(
+          files,
+          {used_tokens, total_characters, total_tokens, unk_count, unk_sequences},
+          fn file_path, {used_acc, chars_acc, tokens_acc, unk_acc, unk_seqs_acc} ->
+            case File.read(file_path) do
+              {:ok, content} ->
+                char_count = String.length(content)
+                token_ids = encode(tokenizer, content)
+                token_count = length(token_ids)
+
+                # Count UNK tokens and sample sequences that became UNK
+                {file_unk_count, file_unk_sequences} =
+                  analyze_unk_tokens(tokenizer, content, token_ids, sample_size)
+
+                # Track which tokens were used
+                file_used_tokens =
+                  token_ids
+                  |> Enum.map(fn id -> id_to_token(tokenizer, id) end)
+                  |> Enum.reject(&is_nil/1)
+                  |> MapSet.new()
+
+                {
+                  MapSet.union(used_acc, file_used_tokens),
+                  chars_acc + char_count,
+                  tokens_acc + token_count,
+                  unk_acc + file_unk_count,
+                  unk_seqs_acc ++
+                    Enum.take(file_unk_sequences, max(0, sample_size - length(unk_seqs_acc)))
+                }
+
+              {:error, _reason} ->
+                # Skip files that can't be read
+                {used_acc, chars_acc, tokens_acc, unk_acc, unk_seqs_acc}
+            end
+          end
+        )
+
+      # Calculate final statistics
+      unused_tokens = MapSet.difference(all_vocab_tokens, used_tokens)
+      used_count = MapSet.size(used_tokens)
+      unused_count = MapSet.size(unused_tokens)
+      vocab_size = MapSet.size(all_vocab_tokens)
+
+      coverage_percentage =
+        if total_tokens > 0 do
+          (total_tokens - unk_count) / total_tokens * 100.0
+        else
+          0.0
+        end
+
+      vocab_utilization_percentage =
+        if vocab_size > 0 do
+          used_count / vocab_size * 100.0
+        else
+          0.0
+        end
+
+      analysis = %{
+        total_files: length(files),
+        total_characters: total_characters,
+        total_tokens: total_tokens,
+        used_vocab_tokens: used_count,
+        unused_vocab_tokens: unused_count,
+        unk_token_count: unk_count,
+        coverage_percentage: Float.round(coverage_percentage, 2),
+        vocab_utilization_percentage: Float.round(vocab_utilization_percentage, 2),
+        used_tokens: used_tokens,
+        unused_tokens: unused_tokens,
+        sample_unk_sequences: Enum.take(unk_sequences, sample_size)
+      }
+
+      {:ok, analysis}
+    rescue
+      e -> {:error, "Analysis failed: #{Exception.message(e)}"}
+    end
+  end
+
+  @spec analyze_unk_tokens(t(), String.t(), list(integer()), integer()) ::
+          {integer(), list(String.t())}
+  defp analyze_unk_tokens(tokenizer, content, token_ids, sample_size) do
+    unk_id = unk_id()
+
+    unk_indices =
+      token_ids
+      |> Enum.with_index()
+      |> Enum.filter(fn {id, _idx} -> id == unk_id end)
+      |> Enum.map(&elem(&1, 1))
+
+    unk_count = length(unk_indices)
+
+    # Sample some sequences that became UNK for analysis
+    graphemes = String.graphemes(content)
+    tokenized_parts = tokenize(graphemes, tokenizer)
+
+    unk_sequences =
+      tokenized_parts
+      |> Enum.with_index()
+      |> Enum.filter(fn {token_or_grapheme, _idx} ->
+        case token_or_grapheme do
+          grapheme when is_binary(grapheme) ->
+            # This was a single character that didn't match any token
+            Map.get(tokenizer.token_to_id, grapheme, unk_id) == unk_id
+
+          _ ->
+            false
+        end
+      end)
+      |> Enum.take(sample_size)
+      |> Enum.map(fn {grapheme, _idx} -> grapheme end)
+
+    {unk_count, unk_sequences}
   end
 
   ## Private helper functions
@@ -486,6 +677,58 @@ defmodule MachineLearning.Tokenizer do
   @spec decode_batch(t(), list(list(integer())), keyword()) :: list(String.t())
   def decode_batch(%__MODULE__{} = tokenizer, batch_ids, opts \\ []) do
     Enum.map(batch_ids, fn ids -> decode(tokenizer, ids, opts) end)
+  end
+
+  @doc """
+  Verifies tokenizer performance against a corpus of files.
+
+  Analyzes how well the tokenizer handles the given corpus by computing
+  statistics on token usage and coverage.
+
+  ## Parameters
+
+  - `tokenizer`: The tokenizer struct
+  - `corpus_directory`: Directory containing text files to analyze
+  - `opts`: Options
+    - `:max_files` - Maximum number of files to process (default: nil, process all)
+    - `:file_extensions` - List of file extensions to process (default: [".txt"])
+    - `:sample_size` - Number of UNK sequences to sample for analysis (default: 10)
+
+  ## Returns
+
+  {:ok, %{
+    total_files: integer(),
+    total_characters: integer(),
+    total_tokens: integer(),
+    used_vocab_tokens: integer(),
+    unused_vocab_tokens: integer(),
+    unk_token_count: integer(),
+    coverage_percentage: float(),
+    vocab_utilization_percentage: float(),
+    used_tokens: MapSet.t(),
+    unused_tokens: MapSet.t(),
+    sample_unk_sequences: list()
+  }} | {:error, reason}
+
+  ## Examples
+
+      iex> {:ok, stats} = MachineLearning.Tokenizer.verify(tokenizer, "/path/to/corpus")
+      iex> stats.coverage_percentage
+      95.5
+  """
+  @spec verify(t(), Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def verify(%__MODULE__{} = tokenizer, corpus_directory, opts \\ []) do
+    max_files = Keyword.get(opts, :max_files)
+    file_extensions = Keyword.get(opts, :file_extensions, [".txt"])
+    sample_size = Keyword.get(opts, :sample_size, 10)
+
+    with {:ok, files} <-
+           collect_corpus_files_for_verification(corpus_directory, file_extensions, max_files),
+         {:ok, analysis} <- analyze_corpus_with_tokenizer(tokenizer, files, sample_size) do
+      {:ok, analysis}
+    else
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
